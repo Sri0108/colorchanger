@@ -21,8 +21,8 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/colorchanger:test .
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/test-repo:colorchanger .
 
       - name: Push Docker image
         run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/colorchanger:test
+          docker push ${{ secrets.DOCKER_USERNAME }}/test-repo:colorchanger
