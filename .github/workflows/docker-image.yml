@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - 'v*' 
+      - 'v*'
 
 jobs:
   build:
@@ -21,10 +21,39 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      - name: Get latest tag from Docker Hub
+        run: |
+          # Fetch the latest tag from Docker Hub repository
+          LATEST_TAG=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/test-repo/tags/" | jq -r '.results[0].name' || echo "v0.0.0")
+
+          # Extract the current major, minor, and patch versions from the latest tag
+          CURRENT_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f2 | tr -d 'v')
+          CURRENT_MINOR=$(echo "$LATEST_TAG" | cut -d. -f3)
+          CURRENT_PATCH=$(echo "$LATEST_TAG" | cut -d. -f4)
+
+          # Determine bump type (major, minor, or patch)
+          if [[ "${{ github.event.inputs.bump_type }}" == "major" ]]; then
+            CURRENT_MAJOR=$((CURRENT_MAJOR + 1))
+            CURRENT_MINOR=0
+            CURRENT_PATCH=0
+          elif [[ "${{ github.event.inputs.bump_type }}" == "minor" ]]; then
+            CURRENT_MINOR=$((CURRENT_MINOR + 1))
+            CURRENT_PATCH=0
+          else
+            CURRENT_PATCH=$((CURRENT_PATCH + 1))
+          fi
+
+          # Create the new version tag
+          NEW_TAG="v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
+
+          # Output the new tag
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
+          echo "Latest tag was: $LATEST_TAG, new tag is: $NEW_TAG"
+
       - name: Build Docker image
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/test-repo:colorchanger .
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/test-repo:${{ env.NEW_TAG }} .
 
       - name: Push Docker image
         run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/test-repo:colorchanger
+          docker push ${{ secrets.DOCKER_USERNAME }}/test-repo:${{ env.NEW_TAG }}
