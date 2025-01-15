@@ -31,12 +31,12 @@ jobs:
           CURRENT_MINOR=$(echo "$LATEST_TAG" | cut -d. -f3)
           CURRENT_PATCH=$(echo "$LATEST_TAG" | cut -d. -f4)
 
-          # Determine bump type (major, minor, or patch)
-          if [[ "${{ github.event.inputs.bump_type }}" == "major" ]]; then
+          # Determine bump type based on commit message (you can specify this in your commit)
+          if git log -1 --pretty=%B | grep -iq "major"; then
             CURRENT_MAJOR=$((CURRENT_MAJOR + 1))
             CURRENT_MINOR=0
             CURRENT_PATCH=0
-          elif [[ "${{ github.event.inputs.bump_type }}" == "minor" ]]; then
+          elif git log -1 --pretty=%B | grep -iq "minor"; then
             CURRENT_MINOR=$((CURRENT_MINOR + 1))
             CURRENT_PATCH=0
           else
