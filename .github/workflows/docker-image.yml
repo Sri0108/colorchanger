@@ -4,7 +4,6 @@ permissions:
   id-token: write   # Required to request the JWT token for OIDC
   contents: read    # Required to read repository contents (checkout)
   packages: write 
-
 on:
   push:
     branches:
@@ -38,63 +37,54 @@ jobs:
         run: |
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
-      # Step 5: Determine the new Docker image tag based on the commit message
+      # Step 5: Determine the new Docker image tag
       - name: Determine new image tag
         id: versioning
         run: |
-          # Get the latest image tag from ECR safely
-          LATEST_TAG=$(aws ecr describe-images \
-            --repository-name ${{ secrets.ECR_REPOSITORY }} \
-            --region ${{ secrets.AWS_REGION }} \
-            --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' \
-            --output text 2>/dev/null || echo "")
-        
-          # If no images exist, set a default tag
-          if [[ -z "$LATEST_TAG" || "$LATEST_TAG" == "None" ]]; then
-            LATEST_TAG="dev-ui.v0.0.0"
-          fi
-        
-          # Extract the current major, minor, and patch versions safely
-          if [[ "$LATEST_TAG" =~ dev-ui.v([0-9]+).([0-9]+).([0-9]+) ]]; then
-            CURRENT_MAJOR=${BASH_REMATCH[1]}
-            CURRENT_MINOR=${BASH_REMATCH[2]}
-            CURRENT_PATCH=${BASH_REMATCH[3]}
-          else
-            CURRENT_MAJOR=0
-            CURRENT_MINOR=0
-            CURRENT_PATCH=0
-          fi
-        
-          # Determine bump type from the commit message
-          if [[ "${{ github.event.head_commit.message }}" == *"major"* ]]; then
-            BUMP_TYPE="major"
-          elif [[ "${{ github.event.head_commit.message }}" == *"minor"* ]]; then
-            BUMP_TYPE="minor"
-          else
-            BUMP_TYPE="patch"
-          fi
-        
-          # Increment the version based on bump type
-          if [[ "$BUMP_TYPE" == "major" ]]; then
-            CURRENT_MAJOR=$((CURRENT_MAJOR + 1))
-            CURRENT_MINOR=0
-            CURRENT_PATCH=0
-          elif [[ "$BUMP_TYPE" == "minor" ]]; then
-            CURRENT_MINOR=$((CURRENT_MINOR + 1))
-            CURRENT_PATCH=0
-          else
-            CURRENT_PATCH=$((CURRENT_PATCH + 1))
-          fi
-        
-          # Create the new version tag
-          NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
-        
-          # Output the new tag
-          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
-          echo "Latest tag was: $LATEST_TAG, new tag is: $NEW_TAG"
+              # Get the latest image tag from ECR safely
+              LATEST_TAG=$(aws ecr describe-images \
+                --repository-name ${{ secrets.ECR_REPOSITORY }} \
+                --region ${{ secrets.AWS_REGION }} \
+                --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' \
+                --output text 2>/dev/null || echo "")
+          
+              # If no images exist, set a default tag
+              if [[ -z "$LATEST_TAG" || "$LATEST_TAG" == "None" ]]; then
+                LATEST_TAG="dev-ui.v0.0.0"
+              fi
+          
+              # Extract the current major, minor, and patch versions safely
+              if [[ "$LATEST_TAG" =~ dev-ui.v([0-9]+).([0-9]+).([0-9]+) ]]; then
+                CURRENT_MAJOR=${BASH_REMATCH[1]}
+                CURRENT_MINOR=${BASH_REMATCH[2]}
+                CURRENT_PATCH=${BASH_REMATCH[3]}
+              else
+                CURRENT_MAJOR=0
+                CURRENT_MINOR=0
+                CURRENT_PATCH=0
+              fi
+          
+              # Determine bump type (major, minor, or patch)
+              if [[ "${{ github.event.inputs.bump_type }}" == "major" ]]; then
+                CURRENT_MAJOR=$((CURRENT_MAJOR + 1))
+                CURRENT_MINOR=0
+                CURRENT_PATCH=0
+              elif [[ "${{ github.event.inputs.bump_type }}" == "minor" ]]; then
+                CURRENT_MINOR=$((CURRENT_MINOR + 1))
+                CURRENT_PATCH=0
+              else
+                CURRENT_PATCH=$((CURRENT_PATCH + 1))
+              fi
+          
+              # Create the new version tag
+              NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
+          
+              # Output the new tag
+              echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
+              echo "Latest tag was: $LATEST_TAG, new tag is: $NEW_TAG"
         continue-on-error: false
 
-      # Step 6: Build, tag, and push Docker image
+
       - name: Build, tag, and push Docker image
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
@@ -136,8 +126,9 @@ jobs:
 
       - name: Install jq
         run: sudo apt-get install jq
-
+      
       # Step 10: Update ECS Task Definition with new image URI
+     # Step 10: Update ECS Task Definition with new image URI
       - name: Update ECS Task Definition Revision
         id: update-task-def
         run: |
