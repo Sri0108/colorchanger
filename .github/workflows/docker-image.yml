@@ -40,6 +40,7 @@ jobs:
 
       # Step 5: Determine the new Docker image tag
 # Step 5: Determine the new Docker image tag
+# Step 5: Determine the new Docker image tag
       - name: Determine new image tag
         id: versioning
         run: |
@@ -56,7 +57,7 @@ jobs:
               fi
           
               # Extract the current major, minor, and patch versions safely
-              if [[ "$LATEST_TAG" =~ dev-ui.v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+              if [[ "$LATEST_TAG" =~ dev-ui\.v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
                 CURRENT_MAJOR=${BASH_REMATCH[1]}
                 CURRENT_MINOR=${BASH_REMATCH[2]}
                 CURRENT_PATCH=${BASH_REMATCH[3]}
@@ -95,6 +96,7 @@ jobs:
               # Output the new tag
               echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
               echo "Latest tag was: $LATEST_TAG, new tag is: $NEW_TAG"
+
 
 
       # Step 6: Build, tag, and push Docker image
