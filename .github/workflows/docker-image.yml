@@ -78,10 +78,14 @@ jobs:
         run: |
           IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
           
-          # Use docker build without buildx
+          # Disable buildx (if using buildkit)
+          export DOCKER_BUILDKIT=0
+      
+          # Build and push Docker image without buildx
           docker build -t $IMAGE_URI .
           docker push $IMAGE_URI
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
 
       # Step 7: Register a new ECS Task Definition Revision
       - name: Register ECS Task Definition
