@@ -131,7 +131,7 @@ jobs:
         id: update-task-def
         run: |
           set -e  # Stop script on error
-      
+    
           echo "Fetching existing task definition..."
           EXISTING_TASK_DEF=$(aws ecs describe-task-definition \
             --task-definition ui \
@@ -155,9 +155,9 @@ jobs:
             --network-mode "awsvpc" \
             --cpu "512" \
             --memory "1024" \
-            --runtime-platform "LINUX" \
             --requires-compatibilities "FARGATE" \
             --container-definitions "$NEW_TASK_DEF_JSON" \
+            --runtime-platform '{"cpuArchitecture":"X86_64","operatingSystemFamily":"LINUX"}' \
             --query "taskDefinition.taskDefinitionArn" \
             --output text)
       
@@ -165,6 +165,7 @@ jobs:
       
           # Output the new task definition ARN for subsequent steps
           echo "NEW_TASK_DEF_ARN=$REGISTERED_TASK_DEF" >> $GITHUB_ENV
+
 
       # Step 11: Deploy the ECS service with the new task definition
       - name: Deploy to ECS Frontend Service
