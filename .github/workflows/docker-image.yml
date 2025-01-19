@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout the code
+      # Step 1: Checkout the code from the repository
       - name: Checkout code
         uses: actions/checkout@v2
 
@@ -19,30 +19,24 @@ jobs:
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}  # The ARN of the IAM role with ECS and ECR permissions
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # Step 3: Debug - Verify AWS credentials
+      # Step 3: Verify AWS credentials
       - name: Verify AWS credentials
         run: |
-          echo "Verifying AWS credentials..."
           aws sts get-caller-identity
 
       # Step 4: Login to Amazon ECR
       - name: Login to Amazon ECR
         id: login-ecr
         run: |
-          echo "Logging in to Amazon ECR..."
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
-          if [ $? -ne 0 ]; then
-            echo "ECR login failed" && exit 1
-          fi
 
-      # Step 5: Determine the new image tag based on the latest image in ECR
+      # Step 5: Determine the new Docker image tag
       - name: Determine new image tag
         id: versioning
         run: |
-          echo "Determining the new image tag..."
           LATEST_TAG=$(aws ecr describe-images \
             --repository-name ${{ secrets.ECR_REPOSITORY }} \
             --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' \
@@ -53,7 +47,7 @@ jobs:
           NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
 
-      # Step 6: Build, tag, and push the Docker image to ECR
+      # Step 6: Build and push Docker image to ECR
       - name: Build, tag, and push Docker image
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
@@ -61,39 +55,30 @@ jobs:
           NEW_TAG: ${{ env.NEW_TAG }}
         run: |
           IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
-          echo "Building Docker image with tag $IMAGE_URI..."
           docker build -t $IMAGE_URI .
-          echo "Pushing Docker image to ECR..."
           docker push $IMAGE_URI
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
-      # Step 7: Register the new ECS task definition
-      - name: Register a new ECS Task Definition Revision
+      # Step 7: Register a new ECS Task Definition Revision
+      - name: Register ECS Task Definition
         id: register-task-def
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          IMAGE_URI: ${{ env.IMAGE_URI }}
         run: |
-          echo "Registering new ECS task definition..."
           EXISTING_TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition ui \
+            --task-definition ui \  # Hardcoded task definition name 'ui'
             --query taskDefinition \
             --output json)
           UPDATED_TASK_DEF=$(echo $EXISTING_TASK_DEF | jq --arg IMAGE_URI "$IMAGE_URI" '.containerDefinitions[0].image = $IMAGE_URI')
           echo $UPDATED_TASK_DEF | jq 'del(.status, .revision, .taskDefinitionArn, .registeredAt, .registeredBy)' > new-task-def.json
           aws ecs register-task-definition --cli-input-json file://new-task-def.json
 
-      # Step 8: Deploy to ECS Frontend Service
+      # Step 8: Deploy the ECS service with the new task definition
       - name: Deploy to ECS Frontend Service
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-          ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
         run: |
-          echo "Deploying to ECS..."
-          NEW_TASK_DEF_ARN=$(aws ecs describe-task-definition --task-definition ui --query 'taskDefinition.taskDefinitionArn' --output text)
+          NEW_TASK_DEF_ARN=$(aws ecs describe-task-definition \
+            --task-definition ui \  # Hardcoded task definition name 'ui'
+            --query 'taskDefinition.taskDefinitionArn' --output text)
           aws ecs update-service \
-            --cluster $ECS_CLUSTER \
-            --service $ECS_SERVICE \
+            --cluster ${{ secrets.ECS_CLUSTER }} \
+            --service ${{ secrets.ECS_SERVICE }} \
             --task-definition $NEW_TASK_DEF_ARN \
             --force-new-deployment
