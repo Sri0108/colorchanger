@@ -91,27 +91,39 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           NEW_TAG: ${{ env.NEW_TAG }}
         run: |
-          # Validate NEW_TAG to avoid empty image tags
+          # Ensure NEW_TAG is not empty
           if [[ -z "$NEW_TAG" ]]; then
             echo "ERROR: NEW_TAG is empty. Exiting." >&2
             exit 1
           fi
       
-          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG"
+          # Ensure registry and repository are set
+          if [[ -z "$ECR_REGISTRY" || -z "$ECR_REPOSITORY" ]]; then
+            echo "ERROR: ECR_REGISTRY or ECR_REPOSITORY is empty. Exiting." >&2
+            exit 1
+          fi
+      
+          # Ensure no newline characters in variables
+          ECR_REGISTRY=$(echo -n "$ECR_REGISTRY" | tr -d '\n')
+          ECR_REPOSITORY=$(echo -n "$ECR_REPOSITORY" | tr -d '\n')
+      
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${NEW_TAG}"
           echo "Building Docker image: $IMAGE_URI"
       
-          # Ensure we use the correct build context (.)
+          # Build Docker image
           docker build -t "$IMAGE_URI" . 
           if [ $? -ne 0 ]; then
             echo "Docker build failed" && exit 1
           fi
       
+          # Push Docker image
           docker push "$IMAGE_URI"
           if [ $? -ne 0 ]; then
             echo "Docker push failed" && exit 1
           fi
       
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
 
 
       # Step 10: Register a new ECS Task Definition Revision
