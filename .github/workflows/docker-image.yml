@@ -140,21 +140,31 @@ jobs:
       
           echo "Task definition retrieved successfully."
       
-          # Extract current revision number
-          TASK_DEF_REVISION=$(echo "$EXISTING_TASK_DEF" | jq -r '.revision')
+          # Extract current image URI
+          CURRENT_IMAGE_URI=$(echo "$EXISTING_TASK_DEF" | jq -r '.containerDefinitions[0].image')
+          echo "Current Image URI: $CURRENT_IMAGE_URI"
       
-          echo "Current Task Definition Revision: $TASK_DEF_REVISION"
+          # Update the task definition with the new image URI
+          NEW_TASK_DEF_JSON=$(echo "$EXISTING_TASK_DEF" | jq --arg IMAGE_URI "$IMAGE_URI" '.containerDefinitions[0].image = $IMAGE_URI')
       
-          echo "Updating ECS service with new image URI: $IMAGE_URI"
+          # Register the new task definition revision
+          REGISTERED_TASK_DEF=$(aws ecs register-task-definition \
+            --family "ui" \
+            --task-role-arn "arn:aws:iam::976571468031:role/ecsTaskExecutionRole" \
+            --execution-role-arn "arn:aws:iam::976571468031:role/ecsTaskExecutionRole" \
+            --network-mode "awsvpc" \
+            --cpu "512" \
+            --memory "1024" \
+            --runtime-platform "LINUX" \
+            --requires-compatibilities "FARGATE" \
+            --container-definitions "$NEW_TASK_DEF_JSON" \
+            --query "taskDefinition.taskDefinitionArn" \
+            --output text)
       
-          aws ecs update-service \
-            --cluster ${{ secrets.ECS_CLUSTER }} \
-            --service ${{ secrets.ECS_SERVICE }} \
-            --force-new-deployment
+          echo "New Task Definition ARN: $REGISTERED_TASK_DEF"
       
-          echo "ECS service update triggered successfully!"
-
-
+          # Output the new task definition ARN for subsequent steps
+          echo "NEW_TASK_DEF_ARN=$REGISTERED_TASK_DEF" >> $GITHUB_ENV
 
       # Step 11: Deploy the ECS service with the new task definition
       - name: Deploy to ECS Frontend Service
