@@ -1,59 +1,130 @@
-name: Build and Push Docker Image
+name: Build, Tag, Push, and Deploy to ECS
 
 on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
 
 jobs:
-  build:
+  build-and-deploy:
+    name: Build, Tag, Push, and Deploy Frontend Service
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v2
+        continue-on-error: false
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with: 
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+        continue-on-error: false
+        
+      - name: Verify AWS credentials
+        run: aws sts get-caller-identity
 
-      - name: Get latest tag from Docker Hub
+      - name: Login to Amazon ECR
+        id: login-ecr
         run: |
-          # Fetch the latest tag from Docker Hub repository
-          LATEST_TAG=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME }}/test-repo/tags/" | jq -r '.results[0].name' || echo "v0.0.0")
-
-          # Extract the current major, minor, and patch versions from the latest tag
-          CURRENT_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f2 | tr -d 'v')
-          CURRENT_MINOR=$(echo "$LATEST_TAG" | cut -d. -f3)
-          CURRENT_PATCH=$(echo "$LATEST_TAG" | cut -d. -f4)
-
-          # Determine bump type based on commit message (you can specify this in your commit)
-          if git log -1 --pretty=%B | grep -iq "major"; then
-            CURRENT_MAJOR=$((CURRENT_MAJOR + 1))
-            CURRENT_MINOR=0
-            CURRENT_PATCH=0
-          elif git log -1 --pretty=%B | grep -iq "minor"; then
-            CURRENT_MINOR=$((CURRENT_MINOR + 1))
-            CURRENT_PATCH=0
-          else
-            CURRENT_PATCH=$((CURRENT_PATCH + 1))
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+          if [$? -ne 0]; then
+            echo "ECR login failed" && exit 1
           fi
-
-          # Create the new version tag
-          NEW_TAG="v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
-
-          # Output the new tag
-          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
-          echo "Latest tag was: $LATEST_TAG, new tag is: $NEW_TAG"
-
-      - name: Build Docker image
+      - name: Determine new image tag
+        id: versioning
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/test-repo:${{ env.NEW_TAG }} .
+          # Get the latest image tag from ECR
+          LATEST_TAG=$(aws ecr describe-images \
+            --repository-name ${{ secrets.ECR_REPOSITORY }} \
+            --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' \
+            --output text || echo "dev-ui.v0.0.0")
+            # Extract the current major, minor, and patch versions from the latest tag
+            CURRENT_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f2 | tr -d 'v')
+            CURRENT_MINOR=$(echo "$LATEST_TAG" | cut -d. -f3)
+            CURRENT_PATCH=$(echo "$LATEST_TAG" | cut -d. -f4)
+            # Determine bump type (major, minor, or patch)
+            if [[ "${{ github.event.inputs.bump_type }}" == "major" ]]; then
+              CURRENT_MAJOR=$((CURRENT_MAJOR + 1))
+              CURRENT_MINOR=0
+              CURRENT_PATCH=0
+            elif [[ "${{ github.event.inputs.bump_type }}" == "minor" ]]; then
+              CURRENT_MINOR=$((CURRENT_MINOR + 1))
+              CURRENT_PATCH=0
+            else
+              CURRENT_PATCH=$((CURRENT_PATCH + 1))
+            fi
+            # Create the new version tag
+            NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
+            # Output the new tag
+            echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
+            echo "Latest tag was: $LATEST_TAG, new tag is: $NEW_TAG"
+        continue-on-error: false
 
-      - name: Push Docker image
+      - name: Build, tag, and push Docker image
+        env:
+            ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+            ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+            NEW_TAG: ${{ env.NEW_TAG }}
         run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/test-repo:${{ env.NEW_TAG }}
+            IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
+            docker build -t $IMAGE_URI .
+            if [$? -ne 0]; then
+              echo "Docker build failed" && exit 1
+            fi
+            docker push $IMAGE_URI
+            if [$? -ne 0]; then
+              echo "Docker push failed" && exit 1
+            fi
+            echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+      - name: Register a new ECS Task Definition Revision
+        id: register-task-def
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          IMAGE_URI: ${{ env.IMAGE_URI }}
+        run: |
+          # Fetch the existing task definition
+          EXISTING_TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition ui \
+            --query taskDefinition \
+            --output json)
+          if [$? -ne 0]; then
+            echo "Failed to fetch the existing the task defination" && exit 1
+          fi
+  
+
+          # Create a new task definition with the updated image
+          UPDATED_TASK_DEF=$(echo $EXISTING_TASK_DEF | jq --arg IMAGE_URI "$IMAGE_URI" '.containerDefinitions[0].image = $IMAGE_URI')
+          if [$? -ne 0]; then
+            echo "Failed to update task defination" && exit 1
+          fi 
+
+          # Register the new task definition revision
+          echo $UPDATED_TASK_DEF | jq 'del(.status, .revision, .taskDefinitionArn, .registeredAt, .registeredBy)' > new-task-def.json
+          aws ecs register-task-definition --cli-input-json file://new-task-def.json
+          if [$? -ne 0]; then
+            echo "Failed to regester the task defination" && exit 1
+          fi
+  
+
+      - name: Deploy to ECS Frontend Service
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECS_CLUSTER: devlop
+          ECS_SERVICE: frontend
+        run: |
+          # Get the latest revision of the task definition
+          NEW_TASK_DEF_ARN=$(aws ecs describe-task-definition --task-definition ui --query 'taskDefinition.taskDefinitionArn' --output text)
+          if [$? -ne 0]; then
+            echo "Failed to retirve the task defination ARN" && exit 1
+          fi
+          # Update the service with the new task definition
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --task-definition $NEW_TASK_DEF_ARN \
+            --force-new-deployment
+          if [$? -ne 0]; then
+            echo "failed to update the service" && exit 1
+          fi
