@@ -42,63 +42,49 @@ jobs:
       - name: Determine new image tag
         id: versioning
         run: |
-          # Fetch the latest tag from ECR
+          # Get the latest image tag from ECR
           LATEST_TAG=$(aws ecr describe-images \
             --repository-name ${{ secrets.ECR_REPOSITORY }} \
-            --region ${{ secrets.AWS_REGION }} \
-            --query "images | sort_by(@, &imagePushedAt) | [-1].imageTags[0]" \
-            --output text || echo "None")
+            --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' \
+            --output text || echo "dev-ui.v0.0.0")
+            # Extract the current major, minor, and patch versions from the latest tag
+            CURRENT_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f2 | tr -d 'v')
+            CURRENT_MINOR=$(echo "$LATEST_TAG" | cut -d. -f3)
+            CURRENT_PATCH=$(echo "$LATEST_TAG" | cut -d. -f4)
+            # Determine bump type (major, minor, or patch)
+            if [[ "${{ github.event.inputs.bump_type }}" == "major" ]]; then
+              CURRENT_MAJOR=$((CURRENT_MAJOR + 1))
+              CURRENT_MINOR=0
+              CURRENT_PATCH=0
+            elif [[ "${{ github.event.inputs.bump_type }}" == "minor" ]]; then
+              CURRENT_MINOR=$((CURRENT_MINOR + 1))
+              CURRENT_PATCH=0
+            else
+              CURRENT_PATCH=$((CURRENT_PATCH + 1))
+            fi
+            # Create the new version tag
+            NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
+            # Output the new tag
+            echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
+            echo "Latest tag was: $LATEST_TAG, new tag is: $NEW_TAG"
+        continue-on-error: false
 
-          # Default tag if no images exist
-          if [ "$LATEST_TAG" == "None" ] || [ -z "$LATEST_TAG" ]; then
-            LATEST_TAG="dev-ui.v1.0.0"
-          fi
-
-          # Parse and increment tag
-          if [[ "$LATEST_TAG" =~ dev-ui.v([0-9]+).([0-9]+).([0-9]+) ]]; then
-            MAJOR=${BASH_REMATCH[1]}
-            MINOR=${BASH_REMATCH[2]}
-            PATCH=${BASH_REMATCH[3]}
-            NEW_TAG="dev-ui.v${MAJOR}.${MINOR}.$((PATCH + 1))"
-          else
-            NEW_TAG="dev-ui.v1.0.0"
-          fi
-
-          # Trim any spaces or newlines
-          NEW_TAG=$(echo "$NEW_TAG" | tr -d '[:space:]')
-
-          # Validate the tag
-          if [[ -z "$NEW_TAG" || "$NEW_TAG" == *" "* || "$NEW_TAG" == *":"* ]]; then
-            echo "Invalid NEW_TAG. Using fallback: dev-ui.v1.0.0"
-            NEW_TAG="dev-ui.v1.0.0"
-          fi
-
-          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
-          echo "NEW_TAG determined: $NEW_TAG"
-
-# Verify NEW_TAG before build
-      - name: Verify NEW_TAG
-        run: echo "Using image tag:$NEW_TAG"
-
-      # Build Docker image
-      - name: Build Docker image
+      - name: Build, tag, and push Docker image
+        env:
+            ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+            ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+            NEW_TAG: ${{ env.NEW_TAG }}
         run: |
-          IMAGE_TAG=${NEW_TAG}
-          if [[ -z "$IMAGE_TAG" ]]; then
-            echo "Error: IMAGE_TAG is empty!" && exit 1
-          fi
-          docker build -t devi:$IMAGE_TAG .  
-          echo "Built Docker image: devi:$IMAGE_TAG"
-
-      # Push Docker image to ECR
-      - name: Push Docker image to ECR
-        run: |
-          IMAGE_TAG=${NEW_TAG}
-          IMAGE_URI=${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:$IMAGE_TAG
-          docker tag devi:$IMAGE_TAG $IMAGE_URI  
-          docker push $IMAGE_URI
-          echo "Pushed Docker image: $IMAGE_URI"
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+            IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
+            docker build -t $IMAGE_URI .
+            if [$? -ne 0]; then
+              echo "Docker build failed" && exit 1
+            fi
+            docker push $IMAGE_URI
+            if [$? -ne 0]; then
+              echo "Docker push failed" && exit 1
+            fi
+            echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
       # Step 10: Register a new ECS Task Definition Revision
       - name: Register ECS Task Definition
