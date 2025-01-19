@@ -77,6 +77,8 @@ jobs:
           NEW_TAG: ${{ env.NEW_TAG }}
         run: |
           IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
+          
+          # Use docker build without buildx
           docker build -t $IMAGE_URI .
           docker push $IMAGE_URI
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
