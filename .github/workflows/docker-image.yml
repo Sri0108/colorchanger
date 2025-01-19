@@ -37,56 +37,32 @@ jobs:
         run: |
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
-      # Step 5: Determine the new Docker image tag
-      - name: Determine new image tag
-        id: versioning
+      # Step 5: Build and tag Docker image
+      - name: Build and tag Docker image
+        id: build-image
         run: |
-          LATEST_TAG=$(aws ecr describe-images \
-            --repository-name ${{ secrets.ECR_REPOSITORY }} \
-            --region ${{ secrets.AWS_REGION }} \
-            --query "images | sort_by(@, &imagePushedAt) | [-1].imageTags[0]" \
-            --output text || echo "None")
-        
-          # If no images are found, set the tag as 'v1.0.0'
-          if [ "$LATEST_TAG" == "None" ] || [ -z "$LATEST_TAG" ]; then
-            LATEST_TAG="v1.0.0"
-          fi
-        
-          # Parse the current tag if not 'latest'
-          if [ "$LATEST_TAG" != "latest" ]; then
-            CURRENT_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f2 | tr -d 'v')
-            CURRENT_MINOR=$(echo "$LATEST_TAG" | cut -d. -f3)
-            CURRENT_PATCH=$(echo "$LATEST_TAG" | cut -d. -f4)
-            NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.$((CURRENT_PATCH + 1))"
-          else
-            # If the latest tag is 'latest', just use it as is
-            NEW_TAG="dev-ui.v1.0.0"
-          fi
-        
-          # Save the new tag for later steps
-          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
-          echo "LATEST_TAG: $LATEST_TAG"
-          echo "NEW_TAG: $NEW_TAG"
-
-      # Step 6: Build and push Docker image using docker buildx
-      - name: Build, tag, and push Docker image with buildx
-        env:
-          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
-          NEW_TAG: ${{ env.NEW_TAG }}
-        run: |
-          IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
-
-          # Enable BuildKit and Buildx
-          export DOCKER_BUILDKIT=1
+          IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)  # Use first 7 characters of the commit SHA
+          IMAGE_URI=${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:$IMAGE_TAG
           
-          # Create and set up a builder instance
-          docker buildx create --use
+          # Build the Docker image
+          docker build -t $IMAGE_URI .
 
-          # Build and push the image using buildx
-          docker buildx build -t $IMAGE_URI . --push
+          # Tag the image with the latest tag
+          docker tag $IMAGE_URI ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:latest
 
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          echo "Pushing $IMAGE_URI to Amazon ECR"
+        
+      # Step 6: Push Docker image to Amazon ECR
+      - name: Push Docker image to Amazon ECR
+        run: |
+          IMAGE_URI=${{ env.IMAGE_URI }}
+
+          # Push the Docker image to ECR
+          docker push $IMAGE_URI
+
+          # Push the 'latest' tag as well
+          docker push ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:latest
 
       # Step 7: Register a new ECS Task Definition Revision
       - name: Register ECS Task Definition
