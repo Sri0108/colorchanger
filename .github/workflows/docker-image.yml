@@ -19,60 +19,65 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      # Step 2: Configure AWS credentials using OIDC
+      # Step 2: Install AWS CLI (just to ensure it's installed)
+      - name: Install AWS CLI
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+
+      # Step 3: Verify AWS CLI installation
+      - name: Check AWS CLI version
+        run: aws --version
+
+      # Step 4: Configure AWS credentials using OIDC
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v2
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}  # The ARN of the IAM role with ECS and ECR permissions
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # Step 3: Verify AWS credentials
+      # Step 5: Verify AWS credentials
       - name: Verify AWS credentials
         run: |
           aws sts get-caller-identity
 
-      # Step 4: Login to Amazon ECR
+      # Step 6: Login to Amazon ECR
       - name: Login to Amazon ECR
         id: login-ecr
         run: |
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
-      # Step 5: Determine the new Docker image tag
+      # Step 7: Determine the new Docker image tag
       - name: Determine new image tag
         id: versioning
         run: |
-                  # Retrieve the latest image tag or fallback to a default tag if repository is empty
-                  LATEST_TAG=$(aws ecr describe-images \
-                    --repository-name ${{ secrets.ECR_REPOSITORY }} \
-                    --region ${{ secrets.AWS_REGION }} \
-                    --query 'images | sort_by(@, &imagePushedAt) | [-1].imageTags[0]' \
-                    --output text || echo "dev-ui.v0.0.0")
-                  
-                  # Check if the tag is empty and set the default tag
-                  if [ "$LATEST_TAG" == "None" ] || [ -z "$LATEST_TAG" ]; then
-                    LATEST_TAG="dev-ui.v0.0.0"
-                  fi
-              
-                  # Split the tag into major, minor, patch, and increment the patch
-                  CURRENT_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f2 | tr -d 'v')
-                  CURRENT_MINOR=$(echo "$LATEST_TAG" | cut -d. -f3)
-                  CURRENT_PATCH=$(echo "$LATEST_TAG" | cut -d. -f4)
-              
-                  # Increment the patch version (you could also increment major or minor versions)
-                  NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.$((CURRENT_PATCH + 1))"
-                  
-                  # Save the new tag for use in subsequent steps
-                  echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
-              
-                  # Debugging output to ensure proper tag format
-                  echo "LATEST_TAG: $LATEST_TAG"
-                  echo "NEW_TAG: $NEW_TAG"
-                    - name: Debugging output
-                      run: |
-                          echo "LATEST_TAG: $LATEST_TAG"
-                          echo "NEW_TAG: $NEW_TAG"
+          # Run the AWS CLI command and store the result in a variable
+          LATEST_TAG=$(aws ecr describe-images \
+            --repository-name ${{ secrets.ECR_REPOSITORY }} \
+            --region ${{ secrets.AWS_REGION }} \
+            --query "images | sort_by(@, &imagePushedAt) | [-1].imageTags[0]" \
+            --output text || echo "dev-ui.v0.0.0")
 
-      # Step 6: Build and push Docker image to ECR
+          # If no tag is found, use a default value
+          if [ "$LATEST_TAG" == "None" ] || [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="dev-ui.v0.0.0"
+          fi
+
+          # Split the tag into components
+          CURRENT_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f2 | tr -d 'v')
+          CURRENT_MINOR=$(echo "$LATEST_TAG" | cut -d. -f3)
+          CURRENT_PATCH=$(echo "$LATEST_TAG" | cut -d. -f4)
+
+          # Increment the patch version
+          NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.$((CURRENT_PATCH + 1))"
+
+          # Save the new tag for later steps
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
+          echo "LATEST_TAG: $LATEST_TAG"
+          echo "NEW_TAG: $NEW_TAG"
+
+      # Step 8: Build and push Docker image to ECR
       - name: Build, tag, and push Docker image
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
@@ -84,7 +89,7 @@ jobs:
           docker push $IMAGE_URI
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
-      # Step 7: Register a new ECS Task Definition Revision
+      # Step 9: Register a new ECS Task Definition Revision
       - name: Register ECS Task Definition
         id: register-task-def
         run: |
@@ -96,7 +101,7 @@ jobs:
           echo $UPDATED_TASK_DEF | jq 'del(.status, .revision, .taskDefinitionArn, .registeredAt, .registeredBy)' > new-task-def.json
           aws ecs register-task-definition --cli-input-json file://new-task-def.json
 
-      # Step 8: Deploy the ECS service with the new task definition
+      # Step 10: Deploy the ECS service with the new task definition
       - name: Deploy to ECS Frontend Service
         run: |
           NEW_TASK_DEF_ARN=$(aws ecs describe-task-definition \
