@@ -11,30 +11,40 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Checkout the code
       - name: Checkout code
         uses: actions/checkout@v2
 
+      # Step 2: Configure AWS credentials using OIDC
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v2
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      # Step 3: Debug - Verify AWS credentials
       - name: Verify AWS credentials
-        run: aws sts get-caller-identity
+        run: |
+          echo "Verifying AWS credentials..."
+          aws sts get-caller-identity
 
+      # Step 4: Login to Amazon ECR
       - name: Login to Amazon ECR
         id: login-ecr
         run: |
-          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 976571468031.dkr.ecr.us-east-1.amazonaws.com          if [ $? -ne 0 ]; then
+          echo "Logging in to Amazon ECR..."
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+          if [ $? -ne 0 ]; then
             echo "ECR login failed" && exit 1
           fi
 
+      # Step 5: Determine the new image tag based on the latest image in ECR
       - name: Determine new image tag
         id: versioning
         run: |
+          echo "Determining the new image tag..."
           LATEST_TAG=$(aws ecr describe-images \
-            --repository-name your-repository-name \
+            --repository-name ${{ secrets.ECR_REPOSITORY }} \
             --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' \
             --output text || echo "dev-ui.v0.0.0")
           CURRENT_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f2 | tr -d 'v')
@@ -43,23 +53,28 @@ jobs:
           NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
 
+      # Step 6: Build, tag, and push the Docker image to ECR
       - name: Build, tag, and push Docker image
         env:
-          ECR_REGISTRY: 976571468031.dkr.ecr.us-east-1.amazonaws.com
-          ECR_REPOSITORY: your-repository-name
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           NEW_TAG: ${{ env.NEW_TAG }}
         run: |
           IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
+          echo "Building Docker image with tag $IMAGE_URI..."
           docker build -t $IMAGE_URI .
+          echo "Pushing Docker image to ECR..."
           docker push $IMAGE_URI
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
+      # Step 7: Register the new ECS task definition
       - name: Register a new ECS Task Definition Revision
         id: register-task-def
         env:
-          AWS_REGION: us-east-1
+          AWS_REGION: ${{ secrets.AWS_REGION }}
           IMAGE_URI: ${{ env.IMAGE_URI }}
         run: |
+          echo "Registering new ECS task definition..."
           EXISTING_TASK_DEF=$(aws ecs describe-task-definition \
             --task-definition ui \
             --query taskDefinition \
@@ -68,12 +83,14 @@ jobs:
           echo $UPDATED_TASK_DEF | jq 'del(.status, .revision, .taskDefinitionArn, .registeredAt, .registeredBy)' > new-task-def.json
           aws ecs register-task-definition --cli-input-json file://new-task-def.json
 
+      # Step 8: Deploy to ECS Frontend Service
       - name: Deploy to ECS Frontend Service
         env:
-          AWS_REGION: us-east-1
-          ECS_CLUSTER: devlop
-          ECS_SERVICE: frontend
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
         run: |
+          echo "Deploying to ECS..."
           NEW_TASK_DEF_ARN=$(aws ecs describe-task-definition --task-definition ui --query 'taskDefinition.taskDefinitionArn' --output text)
           aws ecs update-service \
             --cluster $ECS_CLUSTER \
