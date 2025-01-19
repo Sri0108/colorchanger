@@ -125,33 +125,34 @@ jobs:
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
 
-      - name: Register a new ECS Task Definition Revision
-        id: register-task-def
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          IMAGE_URI: ${{ env.IMAGE_URI }}
-        run: |
-          # Fetch the existing task definition
-          EXISTING_TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition ui \
-            --query taskDefinition \
-            --output json)
-          if [ $? -ne 0 ]; then
-            echo "Failed to fetch the existing task definition" && exit 1
-          fi
-      
-          # Create a new task definition with the updated image
-          UPDATED_TASK_DEF=$(echo $EXISTING_TASK_DEF | jq --arg IMAGE_URI "$IMAGE_URI" '.containerDefinitions[0].image = $IMAGE_URI')
-          if [ $? -ne 0 ]; then
-            echo "Failed to update task definition" && exit 1
-          fi 
-      
-          # Register the new task definition revision
-          echo $UPDATED_TASK_DEF | jq 'del(.status, .revision, .taskDefinitionArn, .registeredAt, .registeredBy)' > new-task-def.json
-          aws ecs register-task-definition --cli-input-json file://new-task-def.json
-          if [ $? -ne 0 ]; then
-            echo "Failed to register the task definition" && exit 1
-          fi
+           - name: Register a new ECS Task Definition Revision
+            id: register-task-def
+            env:
+              AWS_REGION: ${{ secrets.AWS_REGION }}
+              IMAGE_URI: ${{ env.IMAGE_URI }}
+            run: |
+              # Fetch the existing task definition
+              EXISTING_TASK_DEF=$(aws ecs describe-task-definition \
+                --task-definition ui \
+                --query taskDefinition \
+                --output json)
+              if [ $? -ne 0 ]; then
+                echo "Failed to fetch the existing task definition" && exit 1
+              fi
+          
+              # Create a new task definition with the updated image
+              UPDATED_TASK_DEF=$(echo $EXISTING_TASK_DEF | jq --arg IMAGE_URI "$IMAGE_URI" '.containerDefinitions[0].image = $IMAGE_URI')
+              if [ $? -ne 0 ]; then
+                echo "Failed to update task definition" && exit 1
+              fi 
+          
+              # Register the new task definition revision by removing invalid parameters
+              echo $UPDATED_TASK_DEF | jq 'del(.status, .revision, .taskDefinitionArn, .registeredAt, .registeredBy, .requiresAttributes, .compatibilities)' > new-task-def.json
+              aws ecs register-task-definition --cli-input-json file://new-task-def.json
+              if [ $? -ne 0 ]; then
+                echo "Failed to register the task definition" && exit 1
+              fi
+
       
       - name: Deploy to ECS Frontend Service
         env:
