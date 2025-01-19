@@ -41,6 +41,7 @@ jobs:
       # Step 5: Determine the new Docker image tag
 # Step 5: Determine the new Docker image tag
 # Step 5: Determine the new Docker image tag
+# Step 5: Determine the new Docker image tag
       - name: Determine new image tag
         id: versioning
         run: |
@@ -50,12 +51,12 @@ jobs:
                 --region ${{ secrets.AWS_REGION }} \
                 --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' \
                 --output text 2>/dev/null || echo "")
-          
+              
               # If no images exist, set a default tag
               if [[ -z "$LATEST_TAG" || "$LATEST_TAG" == "None" ]]; then
                 LATEST_TAG="dev-ui.v0.0.0"
               fi
-          
+              
               # Extract the current major, minor, and patch versions safely
               if [[ "$LATEST_TAG" =~ dev-ui\.v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
                 CURRENT_MAJOR=${BASH_REMATCH[1]}
@@ -66,10 +67,15 @@ jobs:
                 CURRENT_MINOR=0
                 CURRENT_PATCH=0
               fi
+
+              # Print the current version to debug
+              echo "Current version parsed: ${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
           
               # Determine bump type based on commit message (check for major, minor, or patch in the commit message)
               COMMIT_MSG="${{ github.event.head_commit.message }}"
+              echo "Commit message: $COMMIT_MSG"
               
+              # Determine the bump type based on commit message
               if [[ "$COMMIT_MSG" == *"major"* ]]; then
                 BUMP_TYPE="major"
               elif [[ "$COMMIT_MSG" == *"minor"* ]]; then
@@ -77,7 +83,7 @@ jobs:
               else
                 BUMP_TYPE="patch"
               fi
-          
+              
               # Increment the version based on bump type
               if [[ "$BUMP_TYPE" == "major" ]]; then
                 CURRENT_MAJOR=$((CURRENT_MAJOR + 1))
@@ -96,6 +102,7 @@ jobs:
               # Output the new tag
               echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
               echo "Latest tag was: $LATEST_TAG, new tag is: $NEW_TAG"
+
 
 
 
