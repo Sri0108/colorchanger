@@ -81,7 +81,8 @@ jobs:
           export DOCKER_BUILDKIT=0
           
           # Build and tag Docker image
-          docker build -t $IMAGE_URI .
+           docker build -t $IMAGE_URI -f dockerfile .
+
 
           # Push image to ECR
           docker push $IMAGE_URI
