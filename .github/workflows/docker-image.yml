@@ -124,9 +124,10 @@ jobs:
       
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
+      - name: Install jq
+        run: sudo apt-get install jq
 
-
-      # Step 10: Register a new ECS Task Definition Revision
+# Step 10: Update ECS Task Definition Revision
       - name: Update ECS Task Definition Revision
         id: update-task-def
         run: |
@@ -140,33 +141,34 @@ jobs:
       
           echo "Task definition retrieved successfully."
       
-          # Extract current image URI
-          CURRENT_IMAGE_URI=$(echo "$EXISTING_TASK_DEF" | jq -r '.containerDefinitions[0].image')
-          echo "Current Image URI: $CURRENT_IMAGE_URI"
+          # Extract current revision number
+          TASK_DEF_REVISION=$(echo "$EXISTING_TASK_DEF" | jq -r '.revision')
       
-          # Update the task definition with the new image URI
-          NEW_TASK_DEF_JSON=$(echo "$EXISTING_TASK_DEF" | jq --arg IMAGE_URI "$IMAGE_URI" '.containerDefinitions[0].image = $IMAGE_URI')
+          echo "Current Task Definition Revision: $TASK_DEF_REVISION"
+      
+          # Update container image URI in the task definition
+          IMAGE_URI="976571468031.dkr.ecr.us-east-1.amazonaws.com/devi:dev-ui.${{ github.sha }}"
+      
+          echo "Updating ECS task definition with new image URI: $IMAGE_URI"
+      
+          # Create updated task definition JSON by modifying the image
+          UPDATED_TASK_DEF_JSON=$(echo "$EXISTING_TASK_DEF" | jq \
+            --arg image_uri "$IMAGE_URI" \
+            '.containerDefinitions[0].image = $image_uri')
+      
+          echo "$UPDATED_TASK_DEF_JSON" > updated-task-def.json
       
           # Register the new task definition revision
           REGISTERED_TASK_DEF=$(aws ecs register-task-definition \
-            --family "ui" \
-            --task-role-arn "arn:aws:iam::976571468031:role/ecsTaskExecutionRole" \
-            --execution-role-arn "arn:aws:iam::976571468031:role/ecsTaskExecutionRole" \
-            --network-mode "awsvpc" \
-            --cpu 512 \
-            --memory 1024 \
-            --requires-compatibilities "FARGATE" \
-            --container-definitions "$NEW_TASK_DEF_JSON" \
-            --query "taskDefinition.taskDefinitionArn" \
-            --output text)
+            --cli-input-json file://updated-task-def.json)
       
-          echo "New Task Definition ARN: $REGISTERED_TASK_DEF"
+          # Extract the new task definition revision ARN
+          NEW_TASK_DEF_ARN=$(echo "$REGISTERED_TASK_DEF" | jq -r '.taskDefinition.taskDefinitionArn')
       
-          # Output the new task definition ARN for subsequent steps
-          echo "NEW_TASK_DEF_ARN=$REGISTERED_TASK_DEF" >> $GITHUB_ENV
-
-
-
+          echo "New Task Definition ARN: $NEW_TASK_DEF_ARN"
+          
+          echo "ECS Task Definition updated successfully!"
+      
       # Step 11: Deploy the ECS service with the new task definition
       - name: Deploy to ECS Frontend Service
         run: |
@@ -188,4 +190,4 @@ jobs:
             --force-new-deployment 2>&1) || { echo "Error updating ECS service: $UPDATE_OUTPUT"; exit 1; }
       
           echo "ECS service updated successfully!"
-
+      
