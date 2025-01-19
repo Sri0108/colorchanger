@@ -68,25 +68,24 @@ jobs:
           echo "LATEST_TAG: $LATEST_TAG"
           echo "NEW_TAG: $NEW_TAG"
 
-      # Step 6: Build and push Docker image to ECR
-      - name: Build, tag, and push Docker image
+      # Step 6: Build and push Docker image using docker buildx
+      - name: Build, tag, and push Docker image with buildx
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           NEW_TAG: ${{ env.NEW_TAG }}
         run: |
           IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
-          
-          # Disable Docker BuildKit and avoid buildx
-          export DOCKER_BUILDKIT=0
-          
-          # Build and tag Docker image
-           docker build -t $IMAGE_URI -f dockerfile .
 
-
-          # Push image to ECR
-          docker push $IMAGE_URI
+          # Enable BuildKit and Buildx
+          export DOCKER_BUILDKIT=1
           
+          # Create and set up a builder instance
+          docker buildx create --use
+
+          # Build and push the image using buildx
+          docker buildx build -t $IMAGE_URI . --push
+
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
       # Step 7: Register a new ECS Task Definition Revision
