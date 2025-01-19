@@ -39,6 +39,7 @@ jobs:
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
       # Step 5: Determine the new Docker image tag
+# Step 5: Determine the new Docker image tag
       - name: Determine new image tag
         id: versioning
         run: |
@@ -55,7 +56,7 @@ jobs:
               fi
           
               # Extract the current major, minor, and patch versions safely
-              if [[ "$LATEST_TAG" =~ dev-ui.v([0-9]+).([0-9]+).([0-9]+) ]]; then
+              if [[ "$LATEST_TAG" =~ dev-ui.v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
                 CURRENT_MAJOR=${BASH_REMATCH[1]}
                 CURRENT_MINOR=${BASH_REMATCH[2]}
                 CURRENT_PATCH=${BASH_REMATCH[3]}
@@ -65,10 +66,12 @@ jobs:
                 CURRENT_PATCH=0
               fi
           
-              # Determine bump type from the commit message
-              if [[ "${{ github.event.head_commit.message }}" == *"major"* ]]; then
+              # Determine bump type based on commit message (check for major, minor, or patch in the commit message)
+              COMMIT_MSG="${{ github.event.head_commit.message }}"
+              
+              if [[ "$COMMIT_MSG" == *"major"* ]]; then
                 BUMP_TYPE="major"
-              elif [[ "${{ github.event.head_commit.message }}" == *"minor"* ]]; then
+              elif [[ "$COMMIT_MSG" == *"minor"* ]]; then
                 BUMP_TYPE="minor"
               else
                 BUMP_TYPE="patch"
@@ -92,7 +95,7 @@ jobs:
               # Output the new tag
               echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
               echo "Latest tag was: $LATEST_TAG, new tag is: $NEW_TAG"
-        continue-on-error: false
+
 
       # Step 6: Build, tag, and push Docker image
       - name: Build, tag, and push Docker image
