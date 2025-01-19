@@ -38,71 +38,67 @@ jobs:
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
       # Step 5: Determine the new Docker image tag
+      # Determine the new Docker image tag
       - name: Determine new image tag
         id: versioning
         run: |
-          # Try to fetch the latest image tag from the ECR repository
+          # Fetch the latest tag from ECR
           LATEST_TAG=$(aws ecr describe-images \
             --repository-name ${{ secrets.ECR_REPOSITORY }} \
             --region ${{ secrets.AWS_REGION }} \
             --query "images | sort_by(@, &imagePushedAt) | [-1].imageTags[0]" \
             --output text || echo "None")
-        
-          # If no images are found, set the tag as 'v1.0.0'
+
+          # Default tag if no images exist
           if [ "$LATEST_TAG" == "None" ] || [ -z "$LATEST_TAG" ]; then
-            LATEST_TAG="v1.0.0"
+            LATEST_TAG="dev-ui.v1.0.0"
           fi
-        
-          # Parse the current tag if not 'latest'
-          if [ "$LATEST_TAG" != "latest" ]; then
-            CURRENT_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f2 | tr -d 'v')
-            CURRENT_MINOR=$(echo "$LATEST_TAG" | cut -d. -f3)
-            CURRENT_PATCH=$(echo "$LATEST_TAG" | cut -d. -f4)
-            NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.$((CURRENT_PATCH + 1))"
+
+          # Parse and increment tag
+          if [[ "$LATEST_TAG" =~ dev-ui.v([0-9]+).([0-9]+).([0-9]+) ]]; then
+            MAJOR=${BASH_REMATCH[1]}
+            MINOR=${BASH_REMATCH[2]}
+            PATCH=${BASH_REMATCH[3]}
+            NEW_TAG="dev-ui.v${MAJOR}.${MINOR}.$((PATCH + 1))"
           else
-            # If the latest tag is 'latest', just use it as is
             NEW_TAG="dev-ui.v1.0.0"
           fi
-        
-          # Save the new tag for later steps
+
+          # Trim any spaces or newlines
+          NEW_TAG=$(echo "$NEW_TAG" | tr -d '[:space:]')
+
+          # Validate the tag
+          if [[ -z "$NEW_TAG" || "$NEW_TAG" == *" "* || "$NEW_TAG" == *":"* ]]; then
+            echo "Invalid NEW_TAG. Using fallback: dev-ui.v1.0.0"
+            NEW_TAG="dev-ui.v1.0.0"
+          fi
+
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
-          echo "LATEST_TAG: $LATEST_TAG"
-          echo "NEW_TAG: $NEW_TAG"
+          echo "NEW_TAG determined: $NEW_TAG"
 
-      # Step 6: Verify NEW_TAG before building the Docker image
-      - name: Verify NEW_TAG value
-        run: echo "NEW_TAG=$NEW_TAG"  # Debug step to verify the value of NEW_TAG
+# Verify NEW_TAG before build
+      - name: Verify NEW_TAG
+        run: echo "Using image tag:$NEW_TAG"
 
-      # Step 7: Build Docker image
+      # Build Docker image
       - name: Build Docker image
         run: |
           IMAGE_TAG=${NEW_TAG}
-          # Ensure the tag is valid
-          if [[ -z "$IMAGE_TAG" || "$IMAGE_TAG" == *" "* || "$IMAGE_TAG" == *":"* ]]; then
-            echo "Invalid tag: $IMAGE_TAG. Using default tag: dev-ui.v1.0.0."
-            IMAGE_TAG="dev-ui.v1.0.0"  # Fallback to default tag
+          if [[ -z "$IMAGE_TAG" ]]; then
+            echo "Error: IMAGE_TAG is empty!" && exit 1
           fi
-          docker build -t devi:$IMAGE_TAG .  # Build with the custom tag 'devi:$NEW_TAG'
+          docker build -t devi:$IMAGE_TAG .  
           echo "Built Docker image: devi:$IMAGE_TAG"
-      
-      # Step 8: Push Docker image to ECR
+
+      # Push Docker image to ECR
       - name: Push Docker image to ECR
         run: |
           IMAGE_TAG=${NEW_TAG}
           IMAGE_URI=${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:$IMAGE_TAG
-          # Ensure the tag format is valid before pushing
-          if [[ -z "$IMAGE_TAG" || "$IMAGE_TAG" == *" "* || "$IMAGE_TAG" == *":"* ]]; then
-            echo "Invalid tag: $IMAGE_TAG. Using default tag: dev-ui.v1.0.0."
-            IMAGE_TAG="dev-ui.v1.0.0"  # Fallback to default tag
-            IMAGE_URI=${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:$IMAGE_TAG
-          fi
-          docker tag devi:$IMAGE_TAG $IMAGE_URI  # Tag the local 'devi:$IMAGE_TAG' image to ECR image URI
-          docker push $IMAGE_URI  # Push the image to ECR
+          docker tag devi:$IMAGE_TAG $IMAGE_URI  
+          docker push $IMAGE_URI
           echo "Pushed Docker image: $IMAGE_URI"
-
-      # Step 9: Optionally, output the image URI for use in later steps
-      - name: Output image URI
-        run: echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
       # Step 10: Register a new ECS Task Definition Revision
       - name: Register ECS Task Definition
