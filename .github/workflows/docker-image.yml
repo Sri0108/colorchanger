@@ -1,4 +1,4 @@
-name: Build, Tag, Push, and Deploy to ECS
+name: Build, Tag, Push, and Deploy Frontend Service
 
 on:
   push:
@@ -13,14 +13,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
-        continue-on-error: false
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
+          role-to-assume: arn:aws:iam::976571468031:role/YourECRRole  # Your role ARN
+          aws-region: us-east-1
 
       - name: Verify AWS credentials
         run: aws sts get-caller-identity
@@ -28,7 +26,7 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         run: |
-          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 976571468031.dkr.ecr.us-east-1.amazonaws.com
           if [ $? -ne 0 ]; then
             echo "ECR login failed" && exit 1
           fi
@@ -36,95 +34,50 @@ jobs:
       - name: Determine new image tag
         id: versioning
         run: |
-          # Get the latest image tag from ECR
           LATEST_TAG=$(aws ecr describe-images \
-            --repository-name ${{ secrets.ECR_REPOSITORY }} \
+            --repository-name your-repository-name \
             --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' \
             --output text || echo "dev-ui.v0.0.0")
-            # Extract the current major, minor, and patch versions from the latest tag
-            CURRENT_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f2 | tr -d 'v')
-            CURRENT_MINOR=$(echo "$LATEST_TAG" | cut -d. -f3)
-            CURRENT_PATCH=$(echo "$LATEST_TAG" | cut -d. -f4)
-            # Determine bump type (major, minor, or patch)
-            if [[ "${{ github.event.inputs.bump_type }}" == "major" ]]; then
-              CURRENT_MAJOR=$((CURRENT_MAJOR + 1))
-              CURRENT_MINOR=0
-              CURRENT_PATCH=0
-            elif [[ "${{ github.event.inputs.bump_type }}" == "minor" ]]; then
-              CURRENT_MINOR=$((CURRENT_MINOR + 1))
-              CURRENT_PATCH=0
-            else
-              CURRENT_PATCH=$((CURRENT_PATCH + 1))
-            fi
-            # Create the new version tag
-            NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
-            # Output the new tag
-            echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
-            echo "Latest tag was: $LATEST_TAG, new tag is: $NEW_TAG"
-        continue-on-error: false
+          CURRENT_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f2 | tr -d 'v')
+          CURRENT_MINOR=$(echo "$LATEST_TAG" | cut -d. -f3)
+          CURRENT_PATCH=$(echo "$LATEST_TAG" | cut -d. -f4)
+          NEW_TAG="dev-ui.v${CURRENT_MAJOR}.${CURRENT_MINOR}.${CURRENT_PATCH}"
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
 
       - name: Build, tag, and push Docker image
         env:
-            ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-            ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
-            NEW_TAG: ${{ env.NEW_TAG }}
+          ECR_REGISTRY: 976571468031.dkr.ecr.us-east-1.amazonaws.com
+          ECR_REPOSITORY: your-repository-name
+          NEW_TAG: ${{ env.NEW_TAG }}
         run: |
-            IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
-            docker build -t $IMAGE_URI .
-            if [ $? -ne 0 ]; then
-              echo "Docker build failed" && exit 1
-            fi
-            docker push $IMAGE_URI
-            if [ $? -ne 0 ]; then
-              echo "Docker push failed" && exit 1
-            fi
-            echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
+          docker build -t $IMAGE_URI .
+          docker push $IMAGE_URI
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
       - name: Register a new ECS Task Definition Revision
         id: register-task-def
         env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_REGION: us-east-1
           IMAGE_URI: ${{ env.IMAGE_URI }}
         run: |
-          # Fetch the existing task definition
           EXISTING_TASK_DEF=$(aws ecs describe-task-definition \
             --task-definition ui \
             --query taskDefinition \
             --output json)
-          if [ $? -ne 0 ]; then
-            echo "Failed to fetch the existing task definition" && exit 1
-          fi
-
-          # Create a new task definition with the updated image
           UPDATED_TASK_DEF=$(echo $EXISTING_TASK_DEF | jq --arg IMAGE_URI "$IMAGE_URI" '.containerDefinitions[0].image = $IMAGE_URI')
-          if [ $? -ne 0 ]; then
-            echo "Failed to update task definition" && exit 1
-          fi 
-
-          # Register the new task definition revision
           echo $UPDATED_TASK_DEF | jq 'del(.status, .revision, .taskDefinitionArn, .registeredAt, .registeredBy)' > new-task-def.json
           aws ecs register-task-definition --cli-input-json file://new-task-def.json
-          if [ $? -ne 0 ]; then
-            echo "Failed to register the task definition" && exit 1
-          fi
 
       - name: Deploy to ECS Frontend Service
         env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_REGION: us-east-1
           ECS_CLUSTER: devlop
           ECS_SERVICE: frontend
         run: |
-          # Get the latest revision of the task definition
           NEW_TASK_DEF_ARN=$(aws ecs describe-task-definition --task-definition ui --query 'taskDefinition.taskDefinitionArn' --output text)
-          if [ $? -ne 0 ]; then
-            echo "Failed to retrieve the task definition ARN" && exit 1
-          fi
-          # Update the service with the new task definition
           aws ecs update-service \
             --cluster $ECS_CLUSTER \
             --service $ECS_SERVICE \
             --task-definition $NEW_TASK_DEF_ARN \
             --force-new-deployment
-          if [ $? -ne 0 ]; then
-            echo "Failed to update the service" && exit 1
-          fi
