@@ -1,5 +1,9 @@
 name: Build, Tag, Push, and Deploy Frontend Service
 
+permissions:
+  id-token: write   # Required to request the JWT token for OIDC
+  contents: read    # Required to read repository contents (checkout)
+
 on:
   push:
     branches:
