@@ -38,10 +38,8 @@ jobs:
         run: |
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
 
+
       # Step 5: Determine the new Docker image tag
-# Step 5: Determine the new Docker image tag
-# Step 5: Determine the new Docker image tag
-# Step 5: Determine the new Docker image tag
       - name: Determine new image tag
         id: versioning
         run: |
@@ -102,6 +100,7 @@ jobs:
               # Output the new tag
               echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
               echo "Latest tag was: $LATEST_TAG, new tag is: $NEW_TAG"
+
 
 
 
