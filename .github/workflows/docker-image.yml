@@ -1,4 +1,3 @@
-
 name: Build, Tag, Push, and Deploy Frontend Service
 
 permissions:
@@ -146,36 +145,26 @@ jobs:
       
           echo "Current Task Definition Revision: $TASK_DEF_REVISION"
       
-          echo "Updating ECS service with new image URI: $IMAGE_URI"
+          # Modify the existing task definition with the new image URI
+          NEW_TASK_DEF=$(echo "$EXISTING_TASK_DEF" | jq --arg IMAGE_URI "$IMAGE_URI" \
+            '.containerDefinitions[0].image = $IMAGE_URI | del(.revision)')
       
+          # Register the new task definition revision
+          REGISTERED_TASK_DEF=$(aws ecs register-task-definition \
+            --family ui \
+            --cli-input-json "$NEW_TASK_DEF")
+      
+          # Extract the new task definition ARN
+          NEW_TASK_DEF_ARN=$(echo "$REGISTERED_TASK_DEF" | jq -r '.taskDefinition.taskDefinitionArn')
+      
+          echo "New Task Definition ARN: $NEW_TASK_DEF_ARN"
+      
+          # Step 11: Update ECS service with the new task definition revision
+          echo "Updating ECS service with new task definition..."
           aws ecs update-service \
             --cluster ${{ secrets.ECS_CLUSTER }} \
             --service ${{ secrets.ECS_SERVICE }} \
-            --force-new-deployment
-      
-          echo "ECS service update triggered successfully!"
-
-
-
-      # Step 11: Deploy the ECS service with the new task definition
-      - name: Deploy to ECS Frontend Service
-        run: |
-          set -e  # Stop script on error
-      
-          echo "Fetching current task definition ARN..."
-          NEW_TASK_DEF_ARN=$(aws ecs describe-task-definition \
-            --task-definition ui \
-            --query "taskDefinition.taskDefinitionArn" \
-            --output text 2>&1) || { echo "Error retrieving task definition ARN: $NEW_TASK_DEF_ARN"; exit 1; }
-      
-          echo "Current Task Definition ARN: $NEW_TASK_DEF_ARN"
-      
-          echo "Updating ECS service with new task definition..."
-          UPDATE_OUTPUT=$(aws ecs update-service \
-            --cluster ${{ secrets.ECS_CLUSTER }} \
-            --service ${{ secrets.ECS_SERVICE }} \
             --task-definition "$NEW_TASK_DEF_ARN" \
-            --force-new-deployment 2>&1) || { echo "Error updating ECS service: $UPDATE_OUTPUT"; exit 1; }
-      
-          echo "ECS service updated successfully!"
+            --force-new-deployment
 
+          echo "ECS service updated successfully!"
