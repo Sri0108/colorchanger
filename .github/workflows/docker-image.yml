@@ -126,8 +126,8 @@ jobs:
 
       - name: Install jq
         run: sudo apt-get install jq
-
-# Step 10: Update ECS Task Definition Revision
+      
+      # Step 10: Update ECS Task Definition Revision
       - name: Update ECS Task Definition Revision
         id: update-task-def
         run: |
@@ -141,7 +141,7 @@ jobs:
       
           echo "Task definition retrieved successfully."
       
-          # Extract current revision number
+          # Extract current revision number (though not needed for register-task-definition)
           TASK_DEF_REVISION=$(echo "$EXISTING_TASK_DEF" | jq -r '.revision')
       
           echo "Current Task Definition Revision: $TASK_DEF_REVISION"
@@ -151,10 +151,11 @@ jobs:
       
           echo "Updating ECS task definition with new image URI: $IMAGE_URI"
       
-          # Create updated task definition JSON by modifying the image
+          # Remove unnecessary fields and update the container image URI
           UPDATED_TASK_DEF_JSON=$(echo "$EXISTING_TASK_DEF" | jq \
             --arg image_uri "$IMAGE_URI" \
-            '.containerDefinitions[0].image = $image_uri')
+            'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy) |
+             .containerDefinitions[0].image = $image_uri')
       
           echo "$UPDATED_TASK_DEF_JSON" > updated-task-def.json
       
@@ -174,15 +175,7 @@ jobs:
         run: |
           set -e  # Stop script on error
       
-          echo "Fetching current task definition ARN..."
-          NEW_TASK_DEF_ARN=$(aws ecs describe-task-definition \
-            --task-definition ui \
-            --query "taskDefinition.taskDefinitionArn" \
-            --output text 2>&1) || { echo "Error retrieving task definition ARN: $NEW_TASK_DEF_ARN"; exit 1; }
-      
-          echo "Current Task Definition ARN: $NEW_TASK_DEF_ARN"
-      
-          echo "Updating ECS service with new task definition..."
+          echo "Updating ECS service with the new task definition..."
           UPDATE_OUTPUT=$(aws ecs update-service \
             --cluster ${{ secrets.ECS_CLUSTER }} \
             --service ${{ secrets.ECS_SERVICE }} \
@@ -190,4 +183,3 @@ jobs:
             --force-new-deployment 2>&1) || { echo "Error updating ECS service: $UPDATE_OUTPUT"; exit 1; }
       
           echo "ECS service updated successfully!"
-      
