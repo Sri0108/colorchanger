@@ -73,12 +73,6 @@ jobs:
                 echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
                 echo "New version tag: $NEW_TAG"
 
-
-
-
-
-
-
       # Step 6: Build, tag, and push Docker image
       - name: Build, tag, and push Docker image
         env:
