@@ -76,8 +76,16 @@ jobs:
           NEW_TAG: ${{ env.NEW_TAG }}
         run: |
           IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
+          
+          # Disable Docker BuildKit and avoid buildx
+          export DOCKER_BUILDKIT=0
+          
+          # Build and tag Docker image
           docker build -t $IMAGE_URI .
+
+          # Push image to ECR
           docker push $IMAGE_URI
+          
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
       # Step 7: Register a new ECS Task Definition Revision
