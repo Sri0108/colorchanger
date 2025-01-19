@@ -127,6 +127,7 @@ jobs:
 
 
       # Step 10: Register a new ECS Task Definition Revision
+      # Step 10: Register a new ECS Task Definition Revision
       - name: Update ECS Task Definition Revision
         id: update-task-def
         run: |
@@ -140,18 +141,12 @@ jobs:
       
           echo "Task definition retrieved successfully."
       
-          # Extract current revision number
-          TASK_DEF_REVISION=$(echo "$EXISTING_TASK_DEF" | jq -r '.revision')
-      
-          echo "Current Task Definition Revision: $TASK_DEF_REVISION"
-      
-          # Modify the existing task definition with the new image URI
+          # Extract the necessary parts (family, containerDefinitions) from the existing task definition
           NEW_TASK_DEF=$(echo "$EXISTING_TASK_DEF" | jq --arg IMAGE_URI "$IMAGE_URI" \
-            '.containerDefinitions[0].image = $IMAGE_URI | del(.revision)')
+            '. | {family, containerDefinitions} | .containerDefinitions[0].image = $IMAGE_URI')
       
           # Register the new task definition revision
           REGISTERED_TASK_DEF=$(aws ecs register-task-definition \
-            --family ui \
             --cli-input-json "$NEW_TASK_DEF")
       
           # Extract the new task definition ARN
@@ -168,3 +163,26 @@ jobs:
             --force-new-deployment
 
           echo "ECS service updated successfully!"
+      # Step 11: Deploy to ECS Frontend Service
+      - name: Deploy to ECS Frontend Service
+        run: |
+          set -e  # Stop script on error
+      
+          echo "Fetching the current task definition ARN..."
+          CURRENT_TASK_DEF_ARN=$(aws ecs describe-task-definition \
+            --task-definition ui \
+            --query "taskDefinition.taskDefinitionArn" \
+            --output text 2>&1) || { echo "Error retrieving task definition ARN: $CURRENT_TASK_DEF_ARN"; exit 1; }
+      
+          echo "Current Task Definition ARN: $CURRENT_TASK_DEF_ARN"
+      
+          echo "Updating ECS service with new task definition ARN..."
+          # Update ECS service with the new task definition
+          UPDATE_OUTPUT=$(aws ecs update-service \
+            --cluster ${{ secrets.ECS_CLUSTER }} \
+            --service ${{ secrets.ECS_SERVICE }} \
+            --task-definition "$NEW_TASK_DEF_ARN" \
+            --force-new-deployment 2>&1) || { echo "Error updating ECS service: $UPDATE_OUTPUT"; exit 1; }
+      
+          echo "ECS service updated successfully!"
+
