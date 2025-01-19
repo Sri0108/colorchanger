@@ -41,7 +41,6 @@ jobs:
       - name: Determine new image tag
         id: versioning
         run: |
-          # Try to fetch the latest image tag from the ECR repository
           LATEST_TAG=$(aws ecr describe-images \
             --repository-name ${{ secrets.ECR_REPOSITORY }} \
             --region ${{ secrets.AWS_REGION }} \
@@ -77,15 +76,9 @@ jobs:
           NEW_TAG: ${{ env.NEW_TAG }}
         run: |
           IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$NEW_TAG
-          
-          # Disable buildx (if using buildkit)
-          export DOCKER_BUILDKIT=0
-      
-          # Build and push Docker image without buildx
           docker build -t $IMAGE_URI .
           docker push $IMAGE_URI
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
-
 
       # Step 7: Register a new ECS Task Definition Revision
       - name: Register ECS Task Definition
