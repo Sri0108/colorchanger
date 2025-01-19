@@ -127,7 +127,7 @@ jobs:
       - name: Install jq
         run: sudo apt-get install jq
       
-      # Step 10: Update ECS Task Definition Revision
+      # Step 10: Update ECS Task Definition with new image URI
       - name: Update ECS Task Definition Revision
         id: update-task-def
         run: |
@@ -141,45 +141,37 @@ jobs:
       
           echo "Task definition retrieved successfully."
       
-          # Extract current revision number (though not needed for register-task-definition)
-          TASK_DEF_REVISION=$(echo "$EXISTING_TASK_DEF" | jq -r '.revision')
+          # Extract current task definition and modify the image URI
+          UPDATED_TASK_DEF=$(echo "$EXISTING_TASK_DEF" | jq \
+            --arg IMAGE_URI "$IMAGE_URI" \
+            '.containerDefinitions[0].image = $IMAGE_URI' \
+            | jq '.family = "ui"')  # Optional: Update family if needed
       
-          echo "Current Task Definition Revision: $TASK_DEF_REVISION"
+          echo "Updated task definition with new image URI: $IMAGE_URI"
       
-          # Update container image URI in the task definition
-          IMAGE_URI="976571468031.dkr.ecr.us-east-1.amazonaws.com/devi:dev-ui.${{ github.sha }}"
-      
-          echo "Updating ECS task definition with new image URI: $IMAGE_URI"
-      
-          # Remove unnecessary fields and update the container image URI
-          UPDATED_TASK_DEF_JSON=$(echo "$EXISTING_TASK_DEF" | jq \
-            --arg image_uri "$IMAGE_URI" \
-            'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy) |
-             .containerDefinitions[0].image = $image_uri')
-      
-          echo "$UPDATED_TASK_DEF_JSON" > updated-task-def.json
-      
-          # Register the new task definition revision
+          # Register the updated task definition revision
           REGISTERED_TASK_DEF=$(aws ecs register-task-definition \
-            --cli-input-json file://updated-task-def.json)
+            --cli-input-json "$UPDATED_TASK_DEF" \
+            --query "taskDefinition.taskDefinitionArn" \
+            --output text 2>&1) || { echo "Error registering task definition: $REGISTERED_TASK_DEF"; exit 1; }
       
-          # Extract the new task definition revision ARN
-          NEW_TASK_DEF_ARN=$(echo "$REGISTERED_TASK_DEF" | jq -r '.taskDefinition.taskDefinitionArn')
+          echo "Task definition registered with ARN: $REGISTERED_TASK_DEF"
       
-          echo "New Task Definition ARN: $NEW_TASK_DEF_ARN"
-          
-          echo "ECS Task Definition updated successfully!"
+          # Set the output variable for use in the next step
+          echo "::set-output name=task_def_arn::$REGISTERED_TASK_DEF"
       
-      # Step 11: Deploy the ECS service with the new task definition
+      # Step 11: Deploy to ECS Frontend Service
       - name: Deploy to ECS Frontend Service
         run: |
           set -e  # Stop script on error
       
-          echo "Updating ECS service with the new task definition..."
+          echo "Using new task definition ARN: ${{ steps.update-task-def.outputs.task_def_arn }}"
+      
+          # Update the ECS service with the new task definition ARN
           UPDATE_OUTPUT=$(aws ecs update-service \
             --cluster ${{ secrets.ECS_CLUSTER }} \
             --service ${{ secrets.ECS_SERVICE }} \
-            --task-definition "$NEW_TASK_DEF_ARN" \
+            --task-definition "${{ steps.update-task-def.outputs.task_def_arn }}" \
             --force-new-deployment 2>&1) || { echo "Error updating ECS service: $UPDATE_OUTPUT"; exit 1; }
       
           echo "ECS service updated successfully!"
