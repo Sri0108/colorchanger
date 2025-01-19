@@ -128,6 +128,7 @@ jobs:
         run: sudo apt-get install jq
       
       # Step 10: Update ECS Task Definition with new image URI
+     # Step 10: Update ECS Task Definition with new image URI
       - name: Update ECS Task Definition Revision
         id: update-task-def
         run: |
@@ -141,15 +142,14 @@ jobs:
       
           echo "Task definition retrieved successfully."
       
-          # Extract current task definition and modify the image URI
+          # Extract the relevant fields from the existing task definition and update the image URI
           UPDATED_TASK_DEF=$(echo "$EXISTING_TASK_DEF" | jq \
             --arg IMAGE_URI "$IMAGE_URI" \
-            '.containerDefinitions[0].image = $IMAGE_URI' \
-            | jq '.family = "ui"')  # Optional: Update family if needed
+            '.containerDefinitions[0].image = $IMAGE_URI | { family, taskRoleArn, executionRoleArn, networkMode, containerDefinitions, volumes, placementConstraints, requiresCompatibilities, cpu, memory, runtimePlatform, enableFaultInjection }')
       
           echo "Updated task definition with new image URI: $IMAGE_URI"
       
-          # Register the updated task definition revision
+          # Register the updated task definition revision (without unnecessary fields)
           REGISTERED_TASK_DEF=$(aws ecs register-task-definition \
             --cli-input-json "$UPDATED_TASK_DEF" \
             --query "taskDefinition.taskDefinitionArn" \
