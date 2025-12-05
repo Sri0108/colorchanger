@@ -33,9 +33,9 @@ pipeline{
       sh """
       docker rm -f static-site-${BUILD_NUMBER} || true
       docker run -d --name static-site-${BUILD-NUMBER} -P ${HOST_PORT}:80 ${IMAGE_NAME}:${BUILD_NUMBER}
-       sleep 2
-       docker ps --filter "name=static-site-${BUILD_NUMBER}" --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"
-       """
+      sleep 2
+      docker ps --filter "name=static-site-${BUILD_NUMBER}" --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"
+    """
     }
   }
   }
