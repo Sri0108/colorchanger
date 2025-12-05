@@ -1,10 +1,14 @@
+# from your repo local folder
+git checkout main
+git pull origin main
+# create Jenkinsfile with Kaniko content
+cat > Jenkinsfile <<'EOF'
 pipeline {
   agent any
 
   environment {
     DOCKERHUB_CREDS = 'dockerhub-cred'
     IMAGE_NAME = "srikandala/static-site"
-    HOST_PORT = "8081"
   }
 
   stages {
@@ -14,42 +18,46 @@ pipeline {
       }
     }
 
-    stage('Build image') {
-      steps {
-        echo "Building docker image"
-        sh "docker build -t ${env.IMAGE_NAME}:${env.BUILD_NUMBER} ."
+    stage('Build & Push (Kaniko)') {
+      agent {
+        docker {
+          image 'gcr.io/kaniko-project/executor:latest'
+          args '-v /kaniko/.docker:/kaniko/.docker'
+        }
       }
-    }
-
-    stage('Push Image') {
       steps {
         withCredentials([usernamePassword(credentialsId: env.DOCKERHUB_CREDS, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
           sh '''
-            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-            docker push ${IMAGE_NAME}:${BUILD_NUMBER}
+            set -e
+            mkdir -p /kaniko/.docker
+            cat > /kaniko/.docker/config.json <<EOF
+            {"auths":{"https://index.docker.io/v1/":{"auth":"$(echo -n $DOCKER_USER:$DOCKER_PASS | base64)"}}}
+            EOF
+
+            /kaniko/executor --context ${WORKSPACE} --dockerfile ${WORKSPACE}/Dockerfile --destination ${IMAGE_NAME}:${BUILD_NUMBER}
           '''
         }
       }
     }
 
-    stage('Run Image Locally') {
+    stage('Optional smoke tests') {
       steps {
-        sh """
-          docker rm -f static-site-${env.BUILD_NUMBER} || true
-          docker run -d --name static-site-${env.BUILD_NUMBER} -p ${env.HOST_PORT}:80 ${env.IMAGE_NAME}:${env.BUILD_NUMBER}
-          sleep 2
-          docker ps --filter "name=static-site-${env.BUILD_NUMBER}" --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"
-        """
+        echo "Add smoke/integration steps here if you want"
       }
     }
   }
 
   post {
     success {
-      echo "Success — image: ${env.IMAGE_NAME}:${env.BUILD_NUMBER} running on host port ${env.HOST_PORT}"
+      echo "Success — image: ${env.IMAGE_NAME}:${env.BUILD_NUMBER} pushed."
     }
     failure {
       echo "Pipeline failed — check console output"
     }
   }
 }
+EOF
+
+git add Jenkinsfile
+git commit -m "Use Kaniko to build & push (no docker.sock)"
+git push origin main
