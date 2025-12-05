@@ -1,8 +1,3 @@
-# from your repo local folder
-git checkout main
-git pull origin main
-# create Jenkinsfile with Kaniko content
-cat > Jenkinsfile <<'EOF'
 pipeline {
   agent any
 
@@ -40,9 +35,9 @@ pipeline {
       }
     }
 
-    stage('Optional smoke tests') {
+    stage('Optional Smoke Test') {
       steps {
-        echo "Add smoke/integration steps here if you want"
+        echo "Add smoke/integration steps here if needed"
       }
     }
   }
@@ -56,8 +51,3 @@ pipeline {
     }
   }
 }
-EOF
-
-git add Jenkinsfile
-git commit -m "Use Kaniko to build & push (no docker.sock)"
-git push origin main
