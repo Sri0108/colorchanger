@@ -2,7 +2,7 @@ pipeline{
   agent any 
   environment {
      DOCKERHUB_CREDS = 'dockerhub-cred'  
-     IMAGE_NAME = "your-dockerhub-username/static-site"
+     IMAGE_NAME = "srikandala/static-site"
      HOST_PORT = "8081" 
   }
   stages{
