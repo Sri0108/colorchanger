@@ -47,69 +47,72 @@ pipeline {
       steps {
         script {
           try {
-            sh """
+            sh '''
               set -e
+              echo "Attempting to remove any container named static-site-${BUILD_NUMBER}..."
               docker rm -f static-site-${BUILD_NUMBER} || true
+
+              echo "Attempting to run container static-site-${BUILD_NUMBER} on host port ${HOST_PORT}..."
               docker run -d --name static-site-${BUILD_NUMBER} -p ${HOST_PORT}:80 ${IMAGE_NAME}:${BUILD_NUMBER}
               sleep 2
               docker ps --filter "name=static-site-${BUILD_NUMBER}" --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"
-            """
+            '''
           } catch (err) {
-            echo "Warning: local docker run failed (non-fatal): ${err}"
-            echo "Continuing pipeline"
+            echo "Warning: local docker run failed (non-fatal). Reason: ${err}"
+            echo "Continuing pipeline to Kubernetes deploy."
           }
         }
       }
     }
 
-stage('Deploy to Kubernetes') {
-  steps {
-    withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KUBECONF')]) {
-      sh '''
-        set -e
+    stage('Deploy to Kubernetes') {
+      steps {
+        withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KUBECONF')]) {
+          sh '''
+            set -e
 
-        IMAGE="${IMAGE_NAME}:${BUILD_NUMBER}"
-        echo "Deploying image -> ${IMAGE} to namespace ${K8S_NAMESPACE}"
+            IMAGE="${IMAGE_NAME}:${BUILD_NUMBER}"
+            echo "Deploying image -> ${IMAGE} to namespace ${K8S_NAMESPACE}"
 
-        # COPY kubeconfig into workspace (safe)
-        mkdir -p "$WORKSPACE/.kube"
-        cp "$KUBECONF" "$WORKSPACE/.kube/config"
-        chmod 600 "$WORKSPACE/.kube/config"
+            # copy kubeconfig into workspace
+            mkdir -p "$WORKSPACE/.kube"
+            cp "$KUBECONF" "$WORKSPACE/.kube/config"
+            chmod 600 "$WORKSPACE/.kube/config"
 
-        # Download kubectl into workspace (if not already present)
-        if [ ! -x "$WORKSPACE/kubectl" ]; then
-          echo "Downloading kubectl..."
-          KUBE_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
-          curl -sSL -o "$WORKSPACE/kubectl" "https://dl.k8s.io/release/${KUBE_VER}/bin/linux/amd64/kubectl"
-          chmod +x "$WORKSPACE/kubectl"
-        else
-          echo "kubectl already present in workspace"
-        fi
+            # download kubectl into workspace if missing
+            if [ ! -x "$WORKSPACE/kubectl" ]; then
+              echo "Downloading kubectl..."
+              KUBE_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+              curl -sSL -o "$WORKSPACE/kubectl" "https://dl.k8s.io/release/${KUBE_VER}/bin/linux/amd64/kubectl"
+              chmod +x "$WORKSPACE/kubectl"
+            else
+              echo "kubectl already present in workspace"
+            fi
 
-        # use workspace kubectl and kubeconfig
-        export KUBECONFIG="$WORKSPACE/.kube/config"
-        K="./kubectl --kubeconfig=$KUBECONFIG"
+            export KUBECONFIG="$WORKSPACE/.kube/config"
+            K="$WORKSPACE/kubectl --kubeconfig=$KUBECONFIG"
 
-        echo "Using kubeconfig: $KUBECONFIG"
+            echo "Using kubeconfig: $KUBECONFIG"
 
-        # Ensure namespace exists
-        $K get ns ${K8S_NAMESPACE} >/dev/null 2>&1 || $K create ns ${K8S_NAMESPACE}
+            # ensure namespace exists
+            $K get ns ${K8S_NAMESPACE} >/dev/null 2>&1 || $K create ns ${K8S_NAMESPACE}
 
-        # Create deployment manifest with specific image and apply
-        sed "s|REPLACE_WITH_IMAGE|${IMAGE}|g" k8s/deployment.yaml > /tmp/deploy.yaml
-        $K apply -f /tmp/deploy.yaml -n ${K8S_NAMESPACE}
+            # generate deployment manifest with this specific image and apply
+            sed "s|REPLACE_WITH_IMAGE|${IMAGE}|g" k8s/deployment.yaml > /tmp/deploy.yaml
+            $K apply -f /tmp/deploy.yaml -n ${K8S_NAMESPACE}
 
-        # Apply service (idempotent)
-        $K apply -f k8s/service.yaml -n ${K8S_NAMESPACE}
+            # apply service
+            $K apply -f k8s/service.yaml -n ${K8S_NAMESPACE}
 
-        # Wait for rollout
-        $K rollout status deployment/static-site -n ${K8S_NAMESPACE} --timeout=120s
+            # wait for rollout
+            $K rollout status deployment/static-site -n ${K8S_NAMESPACE} --timeout=120s
 
-        echo "Kubernetes deploy finished."
-      '''
+            echo "Kubernetes deploy finished."
+          '''
+        }
+      }
     }
   }
-}
 
   post {
     success {
@@ -128,10 +131,9 @@ stage('Deploy to Kubernetes') {
       sh '''
         set +e
         docker rm -f static-site-${BUILD_NUMBER} || true
-        # try rollback with kubeconfig from workspace if present
-        if [ -f "$WORKSPACE/.kube/config" ] && command -v kubectl >/dev/null 2>&1; then
+        if [ -f "$WORKSPACE/.kube/config" ] && command -v "$WORKSPACE/kubectl" >/dev/null 2>&1; then
           export KUBECONFIG="$WORKSPACE/.kube/config"
-          kubectl rollout undo deployment/static-site -n ${K8S_NAMESPACE} || true
+          $WORKSPACE/kubectl rollout undo deployment/static-site -n ${K8S_NAMESPACE} || true
         fi
       '''
     }
