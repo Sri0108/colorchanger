@@ -1,6 +1,10 @@
 pipeline {
   agent any
 
+  parameters {
+    booleanParam(name: 'RUN_LOCAL', defaultValue: false, description: 'If true, run the built image on the host (bind HOST_PORT). Set false for CI/CD only.')
+  }
+
   environment {
     DOCKERHUB_CREDS = 'dockerhub-cred'
     IMAGE_NAME = "srikandala/static-site"
@@ -36,16 +40,56 @@ pipeline {
       }
     }
 
-    stage('Run Image Locally (optional)') {
+    stage('Run Image Locally (optional, safe)') {
+      when {
+        expression { return params.RUN_LOCAL == true }
+      }
       steps {
         script {
-          // optional local run for quick smoke test; keep or remove as you like
-          sh """
-            docker rm -f static-site-${BUILD_NUMBER} || true
-            docker run -d --name static-site-${BUILD_NUMBER} -p ${HOST_PORT}:80 ${IMAGE_NAME}:${BUILD_NUMBER}
-            sleep 2
-            docker ps --filter "name=static-site-${BUILD_NUMBER}" --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"
-          """
+          // Best-effort: remove any container that already binds the HOST_PORT, then try run.
+          // Errors are caught and logged, but non-fatal.
+          try {
+            sh """
+              set -e
+              echo "Checking for containers binding host port ${HOST_PORT}..."
+              # List containers and their published ports, find ones exposing :${HOST_PORT}
+              CANDIDATES=\$(docker ps --format '{{.ID}} {{.Names}} {{.Ports}}' | grep ':${HOST_PORT}' || true)
+              if [ -n "\$CANDIDATES" ]; then
+                echo "Found containers using port ${HOST_PORT}:"
+                echo "\$CANDIDATES"
+                # remove each candidate container id (first column)
+                echo "\$CANDIDATES" | awk '{print \$1}' | xargs -r -n1 docker rm -f || true
+                echo "Removed containers that were binding ${HOST_PORT} (if any)."
+              else
+                echo "No containers were found binding ${HOST_PORT}."
+              fi
+
+              # Also try to detect any non-docker process using port (Linux host)
+              if command -v ss >/dev/null 2>&1; then
+                PROC=\$(ss -ltnp 2>/dev/null | grep ':${HOST_PORT}' || true)
+                if [ -n "\$PROC" ]; then
+                  echo "Process found listening on port ${HOST_PORT}:"
+                  echo "\$PROC"
+                  echo "Attempting to show PID and kill (best-effort):"
+                  # extract pid from ss output like "users:(("process",pid=1234,fd=...)"
+                  PIDS=\$(ss -ltnp 2>/dev/null | grep ':${HOST_PORT}' | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p' | uniq)
+                  if [ -n "\$PIDS" ]; then
+                    echo "Killing PIDs: \$PIDS (best-effort)"
+                    echo \$PIDS | xargs -r -n1 kill -9 || true
+                  fi
+                fi
+              fi
+
+              echo "Starting local container (best-effort)..."
+              docker rm -f static-site-${BUILD_NUMBER} || true
+              docker run -d --name static-site-${BUILD_NUMBER} -p ${HOST_PORT}:80 ${IMAGE_NAME}:${BUILD_NUMBER}
+              sleep 2
+              docker ps --filter "name=static-site-${BUILD_NUMBER}" --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"
+            """
+          } catch (err) {
+            echo "Warning: local docker run failed or port cleanup failed (non-fatal). Reason: ${err}"
+            echo "Continuing pipeline to Kubernetes deploy."
+          }
         }
       }
     }
@@ -79,26 +123,6 @@ pipeline {
             # wait for rollout to complete
             kubectl rollout status deployment/static-site -n ${K8S_NAMESPACE} --timeout=120s
 
-            # optional: start port-forward in background so host port maps to service port 80
-            if [ -n "${HOST_PORT}" ]; then
-              echo "Starting (background) port-forward: localhost:${HOST_PORT} -> service/static-site-service:80 (ns: ${K8S_NAMESPACE})"
-
-              # Kill previous pid if exists and running
-              if [ -f "$WORKSPACE/k8s-portforward.pid" ]; then
-                OLDPID=$(cat "$WORKSPACE/k8s-portforward.pid") || true
-                if [ -n "$OLDPID" ] && kill -0 $OLDPID >/dev/null 2>&1; then
-                  echo "Killing old port-forward pid $OLDPID"
-                  kill $OLDPID || true
-                fi
-              fi
-
-              # Start new background port-forward (nohup allows pipeline to continue)
-              nohup kubectl port-forward svc/static-site-service ${HOST_PORT}:80 -n ${K8S_NAMESPACE} >/dev/null 2>&1 &
-              PF_PID=$!
-              echo $PF_PID > "$WORKSPACE/k8s-portforward.pid"
-              echo "Port-forward started (pid: ${PF_PID})"
-            fi
-
             echo "Kubernetes deploy finished."
           '''
         }
@@ -109,24 +133,18 @@ pipeline {
   post {
     success {
       echo "Success — image: ${env.IMAGE_NAME}:${env.BUILD_NUMBER} deployed to ${env.K8S_NAMESPACE}"
-      echo "If port-forward started, access the app at http://localhost:${env.HOST_PORT}"
+      if (params.RUN_LOCAL.toBoolean()) {
+        echo "If local container started, access app at http://localhost:${env.HOST_PORT}"
+      } else {
+        echo "Local run skipped (RUN_LOCAL=false). Use kubectl port-forward or NodePort to access the app."
+      }
     }
 
     failure {
       echo "Pipeline failed — attempting cleanup and rollback (best-effort). See console for details."
       sh '''
         set +e
-        # stop port-forward if it was started
-        if [ -f "$WORKSPACE/k8s-portforward.pid" ]; then
-          PID=$(cat "$WORKSPACE/k8s-portforward.pid") || true
-          if [ -n "$PID" ] && kill -0 $PID >/dev/null 2>&1; then
-            echo "Killing port-forward pid $PID"
-            kill $PID || true
-            rm -f "$WORKSPACE/k8s-portforward.pid"
-          fi
-        fi
-
-        # attempt rollback if kubectl is configured
+        docker rm -f static-site-${BUILD_NUMBER} || true
         if command -v kubectl >/dev/null 2>&1; then
           kubectl rollout undo deployment/static-site -n ${K8S_NAMESPACE} || true
         fi
