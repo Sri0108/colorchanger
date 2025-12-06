@@ -16,19 +16,19 @@ spec:
     spec:
       containers:
         - name: static-site
-          image: srikandala/static-site
+          # pipeline replaces REPLACE_WITH_IMAGE with the built image:tag
+          image: REPLACE_WITH_IMAGE
           ports:
             - containerPort: 80
-          readinessProbe:
-            httpGet:
-              path: /
-              port: 80
-            initialDelaySeconds: 2
-            periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /
               port: 80
             initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
             periodSeconds: 10
-          imagePullPolicy: IfNotPresent
