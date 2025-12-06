@@ -18,12 +18,13 @@ pipeline {
       agent{
         docker{
           image 'python:3.11'
-          args '-u root:root'
+          args '--user root:root'
         }
       }
       steps{
         sh '''
-        pip install --upgrade pip pytest junit-xml || true
+        set -e
+        pip install --upgrade pip || true
         if [ -f requirements.txt ]; then pip install -r requirements.txt || true; fi
         mkdir -p test-results
         pytest --junitxml=test-results/results.xml || true
