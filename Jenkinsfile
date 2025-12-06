@@ -67,54 +67,49 @@ pipeline {
       }
     }
 
-    stage('Prepare Kubeconfig & kubectl') {
-      steps {
-        withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KUBECONF')]) {
-          sh '''
-            set -e
-            # workspace kube dir
-            mkdir -p "$WORKSPACE/.kube"
+stage('Prepare Kubeconfig & kubectl') {
+  steps {
+    withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KUBECONF')]) {
+      sh '''
+        set -e
+        mkdir -p "$WORKSPACE/.kube"
+        cp "$KUBECONF" "$WORKSPACE/.kube/config.orig"
+        chmod 600 "$WORKSPACE/.kube/config.orig"
 
-            # copy uploaded secret file into workspace
-            cp "$KUBECONF" "$WORKSPACE/.kube/config.orig"
-            chmod 600 "$WORKSPACE/.kube/config.orig"
+        if [ ! -x "$WORKSPACE/kubectl" ]; then
+          echo "Downloading kubectl into workspace..."
+          KUBE_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+          curl -sSL --fail -o "$WORKSPACE/kubectl" "https://dl.k8s.io/release/${KUBE_VER}/bin/linux/amd64/kubectl"
+          chmod +x "$WORKSPACE/kubectl"
+        fi
 
-            # download kubectl into workspace if missing (robust)
-            if [ ! -x "$WORKSPACE/kubectl" ]; then
-              echo "Downloading kubectl into workspace..."
-              KUBE_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
-              curl -sSL --fail -o "$WORKSPACE/kubectl" "https://dl.k8s.io/release/${KUBE_VER}/bin/linux/amd64/kubectl"
-              if [ ! -s "$WORKSPACE/kubectl" ]; then
-                echo "kubectl download failed or empty file" >&2
-                exit 1
-              fi
-              chmod +x "$WORKSPACE/kubectl"
-            else
-              echo "kubectl already present in workspace"
-            fi
+        export KUBECONFIG="$WORKSPACE/.kube/config.orig"
+        echo "Normalizing kubeconfig using workspace kubectl..."
+        "$WORKSPACE/kubectl" config view --raw -o yaml > "$WORKSPACE/.kube/config.tmp" || cp "$WORKSPACE/.kube/config.orig" "$WORKSPACE/.kube/config.tmp"
 
-            # Normalize kubeconfig with workspace kubectl (embed CA etc.)
-            export KUBECONFIG="$WORKSPACE/.kube/config.orig"
-            echo "Normalizing kubeconfig using workspace kubectl..."
-            "$WORKSPACE/kubectl" config view --raw -o yaml > "$WORKSPACE/.kube/config.tmp" || {
-              echo "kubectl config view failed; falling back to original config copy"
-              cp "$WORKSPACE/.kube/config.orig" "$WORKSPACE/.kube/config.tmp"
-            }
+        echo "Patching kubeconfig for demo: switching host to host.docker.internal and enabling insecure-skip-tls-verify"
 
-            # Replace localhost/127.0.0.1 hostnames with host.docker.internal while preserving port
-            # use awk to avoid problematic backslashes inside Groovy strings
-            awk '/server: / {
-                   gsub("127.0.0.1","host.docker.internal");
-                   gsub("localhost","host.docker.internal");
-                   print; next
-                 } { print }' "$WORKSPACE/.kube/config.tmp" > "$WORKSPACE/.kube/config"
+        awk '
+          /^\\s*server: / {
+            gsub(/https?:\\/\\//, "", $2)
+            hostport = $2
+            split(hostport, a, ":")
+            port = a[2]
+            print "    server: https://host.docker.internal:" port
+            print "    insecure-skip-tls-verify: true"
+            next
+          }
+          /certificate-authority-data:/ { next }
+          { print }
+        ' "$WORKSPACE/.kube/config.tmp" > "$WORKSPACE/.kube/config"
 
-            chmod 600 "$WORKSPACE/.kube/config"
-            echo "Prepared kubeconfig at $WORKSPACE/.kube/config"
-          '''
-        }
-      }
+        chmod 600 "$WORKSPACE/.kube/config"
+        echo "Prepared (demo) kubeconfig at $WORKSPACE/.kube/config"
+      '''
     }
+  }
+}
+
 
     stage('Deploy to Kubernetes') {
       steps {
