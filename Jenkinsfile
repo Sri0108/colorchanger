@@ -52,26 +52,21 @@ pipeline {
             sh """
               set -e
               echo "Checking for containers binding host port ${HOST_PORT}..."
-              # List containers and their published ports, find ones exposing :${HOST_PORT}
               CANDIDATES=\$(docker ps --format '{{.ID}} {{.Names}} {{.Ports}}' | grep ':${HOST_PORT}' || true)
               if [ -n "\$CANDIDATES" ]; then
                 echo "Found containers using port ${HOST_PORT}:"
                 echo "\$CANDIDATES"
-                # remove each candidate container id (first column)
                 echo "\$CANDIDATES" | awk '{print \$1}' | xargs -r -n1 docker rm -f || true
                 echo "Removed containers that were binding ${HOST_PORT} (if any)."
               else
                 echo "No containers were found binding ${HOST_PORT}."
               fi
 
-              # Also try to detect any non-docker process using port (Linux host)
               if command -v ss >/dev/null 2>&1; then
                 PROC=\$(ss -ltnp 2>/dev/null | grep ':${HOST_PORT}' || true)
                 if [ -n "\$PROC" ]; then
                   echo "Process found listening on port ${HOST_PORT}:"
                   echo "\$PROC"
-                  echo "Attempting to show PID and kill (best-effort):"
-                  # extract pid from ss output like "users:(("process",pid=1234,fd=...)"
                   PIDS=\$(ss -ltnp 2>/dev/null | grep ':${HOST_PORT}' | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p' | uniq)
                   if [ -n "\$PIDS" ]; then
                     echo "Killing PIDs: \$PIDS (best-effort)"
@@ -132,11 +127,14 @@ pipeline {
 
   post {
     success {
-      echo "Success — image: ${env.IMAGE_NAME}:${env.BUILD_NUMBER} deployed to ${env.K8S_NAMESPACE}"
-      if (params.RUN_LOCAL.toBoolean()) {
-        echo "If local container started, access app at http://localhost:${env.HOST_PORT}"
-      } else {
-        echo "Local run skipped (RUN_LOCAL=false). Use kubectl port-forward or NodePort to access the app."
+      // Use a script block for conditional behavior inside post
+      script {
+        echo "Success — image: ${env.IMAGE_NAME}:${env.BUILD_NUMBER} deployed to ${env.K8S_NAMESPACE}"
+        if (params.RUN_LOCAL) {
+          echo "If local container started, access app at http://localhost:${env.HOST_PORT}"
+        } else {
+          echo "Local run skipped (RUN_LOCAL=false). Use kubectl port-forward or NodePort to access the app."
+        }
       }
     }
 
