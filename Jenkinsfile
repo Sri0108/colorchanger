@@ -13,17 +13,18 @@ pipeline {
       steps { checkout scm }
     }
 
-    stage('Test') {
-      // run tests inside a python docker agent so Jenkins master need not have python.
-      agent { docker { image 'python:3.11' } }
+  stage('Test') {
       steps {
-        sh '''
-          set -eux
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          mkdir -p test-results
-          # run pytest to produce junit xml
-          pytest --junitxml=test-results/results.xml || true
-        '''
+        script {
+          docker.image('python:3.11').inside {
+            sh '''
+              set -eux
+              if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+              mkdir -p test-results
+              pytest --junitxml=test-results/results.xml || true
+            '''
+          }
+        }
       }
       post {
         always {
