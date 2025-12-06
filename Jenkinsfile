@@ -14,6 +14,30 @@ pipeline {
       }
     }
 
+    stage('test'){
+      agent{
+        docker{
+          image 'python:3.11'
+          args '-u root:root'
+        }
+      }
+      steps{
+        sh '''
+        pip install --upgrade pip pytest junit-xml || true
+        if [ -f requirements.txt ]; then pip install -r requirements.txt || true; fi
+        mkdir -p test-results
+        pytest --junitxml=test-results/results.xml || true
+        '''
+      }
+    }
+    post{
+      always{
+        junit testResults: 'test-results/**/*.xml', allowEmptyResults: true
+      }
+    }
+  }
+      
+
     stage('Build image') {
       steps {
         echo "Building docker image"
@@ -22,6 +46,7 @@ pipeline {
     }
 
     stage('Push Image') {
+      when { expression { return env.CHANGE_ID == null } }
       steps {
         withCredentials([usernamePassword(credentialsId: env.DOCKERHUB_CREDS, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
           sh '''
@@ -33,6 +58,12 @@ pipeline {
     }
 
     stage('Run Image Locally') {
+      when {
+        allOf {
+          expression { return env.CHANGE_ID == null }
+          expression { return env.BRANCH_NAME == 'main' }
+        }
+      }
       steps {
         sh """
           docker rm -f static-site-${env.BUILD_NUMBER} || true
@@ -50,6 +81,9 @@ pipeline {
     }
     failure {
       echo "Pipeline failed — check console output"
+    }
+    always{
+      sh "docker image rm ${env.IMAGE_NAME}:${env.BUILD_NUMBER} || true"
     }
   }
 }
