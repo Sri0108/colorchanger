@@ -5,8 +5,6 @@ pipeline {
     DOCKERHUB_CREDS = 'dockerhub-cred'
     IMAGE_NAME = "srikandala/static-site"
     HOST_PORT = "8081"
-    NODE_PORT = "30081"
-    K8S_MANIFEST_DIR = "k8s"
   }
 
   stages {
@@ -34,40 +32,21 @@ pipeline {
       }
     }
 
-  stage('Deploy to Kubernetes') {
+    stage('Run Image Locally') {
       steps {
-        script {
-          // create temporary manifests with the new image
-          sh """
-            mkdir -p tmp_k8s
-            sed "s|REPLACE_WITH_IMAGE|${IMAGE_NAME}:${BUILD_NUMBER}|g" ${K8S_MANIFEST_DIR}/deployment.yaml > tmp_k8s/deployment.yaml
-            sed "s|REPLACE_WITH_IMAGE|${IMAGE_NAME}:${BUILD_NUMBER}|g" ${K8S_MANIFEST_DIR}/service.yaml > tmp_k8s/service.yaml
-            kubectl apply -f tmp_k8s/deployment.yaml
-            kubectl apply -f tmp_k8s/service.yaml
-            kubectl rollout status deployment/static-site --timeout=120s || true
-          """
-        }
-      }
-    }
-
-  stage('Verify') {
-      steps {
-        // quick check: list pods and service info
         sh """
-          echo '--- pods ---'
-          kubectl get pods -l app=static-site -o wide
-          echo '--- svc ---'
-          kubectl get svc static-site-service -o wide
+          docker rm -f static-site-${env.BUILD_NUMBER} || true
+          docker run -d --name static-site-${env.BUILD_NUMBER} -p ${env.HOST_PORT}:80 ${env.IMAGE_NAME}:${env.BUILD_NUMBER}
+          sleep 2
+          docker ps --filter "name=static-site-${env.BUILD_NUMBER}" --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"
         """
       }
     }
   }
 
-
   post {
     success {
-      echo "Success — image: ${env.IMAGE_NAME}:${env.BUILD_NUMBER} deployed to Kubernetes"
-      echo "If using kind, access via NodePort: http://localhost:${NODE_PORT}"
+      echo "Success — image: ${env.IMAGE_NAME}:${env.BUILD_NUMBER} running on host port ${env.HOST_PORT}"
     }
     failure {
       echo "Pipeline failed — check console output"
