@@ -35,7 +35,9 @@ pipeline {
 
     stage('Build image') {
       steps {
-        sh "docker build -t ${env.IMAGE_NAME}:${env.BUILD_NUMBER} ."
+        SHORT_COMMIT = sh(script: "git rev-parse --short=8 HEAD", returnStdout: true).trim()
+        IMAGE_TAG = "${env.IMAGE_NAME}:${SHORT_COMMIT}"
+        sh "docker build -t ${IMAGE_TAG} ."
       }
     }
 
@@ -44,25 +46,24 @@ pipeline {
       steps {
         withCredentials([usernamePassword(credentialsId: env.DOCKERHUB_CREDS, usernameVariable:'DOCKER_USER', passwordVariable:'DOCKER_PASS')]) {
           sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
-          sh "docker push ${env.IMAGE_NAME}:${env.BUILD_NUMBER}"
+          sh "docker push ${IMAGE_TAG}"
+          docker logout
         }
       }
     }
 
-    stage('Run Image Locally') {
-      when {
-        allOf {
-          expression { return env.CHANGE_ID == null }
-          expression { return env.BRANCH_NAME == 'main' }
-        }
-      }
+    stage('Update K8s manifests & deploy') {
       steps {
-        sh """
-          docker rm -f static-site-${env.BUILD_NUMBER} || true
-          docker run -d --name static-site-${env.BUILD_NUMBER} -p ${env.HOST_PORT}:80 ${env.IMAGE_NAME}:${env.BUILD_NUMBER}
-          sleep 2
-          docker ps --filter "name=static-site-${env.BUILD_NUMBER}" --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"
-        """
+        script {
+          // create a temp folder with manifest with replaced image
+          sh '''
+            mkdir -p tmp_k8s
+            sed "s|REPLACE_WITH_IMAGE|${IMAGE_TAG}|g" k8s/deployment.yaml > tmp_k8s/deployment.yaml
+            cp k8s/service.yaml tmp_k8s/service.yaml
+            kubectl apply -f tmp_k8s/
+            kubectl rollout status deployment/myapp --timeout=120s || true
+          '''
+        }
       }
     }
   }
