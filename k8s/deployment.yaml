@@ -1,28 +1,29 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: myapp
+  name: static-site
   labels:
-    app: myapp
+    app: static-site
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: myapp
+      app: static-site
   template:
     metadata:
       labels:
-        app: myapp
+        app: static-site
     spec:
       containers:
-        - name: myapp
+        - name: static-site
           # image will be replaced by the pipeline using env substitution
           image: srikandala/static-site
           ports:
-            - containerPort: 8080
+            - containerPort: 80
           readinessProbe:
             httpGet:
               path: /
-              port: 8080
+              port: 80
             initialDelaySeconds: 2
             periodSeconds: 5
+
