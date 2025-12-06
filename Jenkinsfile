@@ -9,25 +9,19 @@ pipeline {
 
   stages {
     stage('Checkout') {
-      steps {
-        checkout scm
-      }
+      steps { checkout scm }
     }
 
     stage('Test (HTML static checks)') {
-      agent {
-        docker {
-          image 'python:3.11'
-          args '--user root:root'
-        }
-      }
       steps {
         sh '''
           set -e
-          pip install --upgrade pip || true
-          if [ -f requirements.txt ]; then pip install -r requirements.txt || true; fi
-          mkdir -p test-results
-          pytest --junitxml=test-results/results.xml || true
+          docker run --rm -v "$WORKSPACE":/workspace -w /workspace python:3.11 bash -lc "
+            pip install --upgrade pip || true
+            if [ -f requirements.txt ]; then pip install -r requirements.txt || true; fi
+            mkdir -p test-results
+            pytest --junitxml=test-results/results.xml || true
+          "
         '''
       }
       post {
@@ -45,9 +39,7 @@ pipeline {
     }
 
     stage('Push Image') {
-      when {
-        expression { return env.CHANGE_ID == null }
-      }
+      when { expression { return env.CHANGE_ID == null } }
       steps {
         withCredentials([usernamePassword(credentialsId: env.DOCKERHUB_CREDS, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
           sh '''
@@ -77,14 +69,8 @@ pipeline {
   }
 
   post {
-    success {
-      echo "Success — image: ${env.IMAGE_NAME}:${env.BUILD_NUMBER}"
-    }
-    failure {
-      echo "Pipeline failed — check console & test results"
-    }
-    always {
-      sh "docker image rm ${env.IMAGE_NAME}:${env.BUILD_NUMBER} || true"
-    }
+    success { echo "Success — image: ${env.IMAGE_NAME}:${env.BUILD_NUMBER}" }
+    failure { echo "Pipeline failed — check console & test results" }
+    always { sh "docker image rm ${env.IMAGE_NAME}:${env.BUILD_NUMBER} || true" }
   }
 }
