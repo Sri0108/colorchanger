@@ -65,23 +65,21 @@ pipeline {
       }
     }
 
-    stage('Deploy to Kubernetes') {
+    stage('Prepare Kubeconfig & kubectl') {
       steps {
         withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KUBECONF')]) {
           sh '''
             set -e
-
-            IMAGE="${IMAGE_NAME}:${BUILD_NUMBER}"
-            echo "Deploying image -> ${IMAGE} to namespace ${K8S_NAMESPACE}"
-
-            # copy kubeconfig into workspace
+            # ensure workspace kube dir
             mkdir -p "$WORKSPACE/.kube"
-            cp "$KUBECONF" "$WORKSPACE/.kube/config"
-            chmod 600 "$WORKSPACE/.kube/config"
+
+            # copy secret kubeconfig into workspace (safe write location)
+            cp "$KUBECONF" "$WORKSPACE/.kube/config.orig"
+            chmod 600 "$WORKSPACE/.kube/config.orig"
 
             # download kubectl into workspace if missing
             if [ ! -x "$WORKSPACE/kubectl" ]; then
-              echo "Downloading kubectl..."
+              echo "Downloading kubectl into workspace..."
               KUBE_VER=$(curl -L -s https://dl.k8s.io/release/stable.txt)
               curl -sSL -o "$WORKSPACE/kubectl" "https://dl.k8s.io/release/${KUBE_VER}/bin/linux/amd64/kubectl"
               chmod +x "$WORKSPACE/kubectl"
@@ -89,27 +87,65 @@ pipeline {
               echo "kubectl already present in workspace"
             fi
 
-            export KUBECONFIG="$WORKSPACE/.kube/config"
-            K="$WORKSPACE/kubectl --kubeconfig=$KUBECONFIG"
+            # Normalize kubeconfig: embed/base64 CA and other fields with 'kubectl config view --raw'
+            # Use the workspace kubectl binary to render a clean kubeconfig.
+            export KUBECONFIG="$WORKSPACE/.kube/config.orig"
+            echo "Normalizing kubeconfig using workspace kubectl..."
+            "$WORKSPACE/kubectl" config view --raw -o yaml > "$WORKSPACE/.kube/config.tmp" || {
+              echo "kubectl config view failed (but proceeding to copy original)."
+              cp "$WORKSPACE/.kube/config.orig" "$WORKSPACE/.kube/config.tmp"
+            }
 
-            echo "Using kubeconfig: $KUBECONFIG"
+            # Replace 127.0.0.1:PORT server entries with host.docker.internal:6443 when detected
+            if grep -qE "server: https?://(127\\.0\\.0\\.1|localhost):[0-9]+" "$WORKSPACE/.kube/config.tmp"; then
+              echo "Detected localhost server address in kubeconfig — replacing with host.docker.internal:6443 for access from Docker containers"
+              sed -E 's|server: https?://(127\.0\.0\.1|localhost):[0-9]+|server: https://host.docker.internal:6443|g' "$WORKSPACE/.kube/config.tmp" > "$WORKSPACE/.kube/config"
+            else
+              mv "$WORKSPACE/.kube/config.tmp" "$WORKSPACE/.kube/config"
+            fi
 
-            # ensure namespace exists
-            $K get ns ${K8S_NAMESPACE} >/dev/null 2>&1 || $K create ns ${K8S_NAMESPACE}
-
-            # generate deployment manifest with this specific image and apply
-            sed "s|REPLACE_WITH_IMAGE|${IMAGE}|g" k8s/deployment.yaml > /tmp/deploy.yaml
-            $K apply -f /tmp/deploy.yaml -n ${K8S_NAMESPACE}
-
-            # apply service
-            $K apply -f k8s/service.yaml -n ${K8S_NAMESPACE}
-
-            # wait for rollout
-            $K rollout status deployment/static-site -n ${K8S_NAMESPACE} --timeout=120s
-
-            echo "Kubernetes deploy finished."
+            chmod 600 "$WORKSPACE/.kube/config"
+            echo "Prepared kubeconfig at $WORKSPACE/.kube/config"
           '''
         }
+      }
+    }
+
+    stage('Deploy to Kubernetes') {
+      steps {
+        sh '''
+          set -e
+
+          IMAGE="${IMAGE_NAME}:${BUILD_NUMBER}"
+          echo "Deploying image -> ${IMAGE} to namespace ${K8S_NAMESPACE}"
+
+          # use prepared kubeconfig and workspace kubectl
+          export KUBECONFIG="$WORKSPACE/.kube/config"
+          K="$WORKSPACE/kubectl --kubeconfig=$KUBECONFIG"
+
+          echo "Using kubeconfig: $KUBECONFIG"
+
+          # quick connectivity check (will fail with helpful message)
+          echo "Testing access to Kubernetes API..."
+          if ! $K version --short >/dev/null 2>&1; then
+            echo "WARNING: workspace kubectl could not contact the cluster. Check server address in kubeconfig and network connectivity."
+          fi
+
+          # ensure namespace exists
+          $K get ns ${K8S_NAMESPACE} >/dev/null 2>&1 || $K create ns ${K8S_NAMESPACE}
+
+          # generate deployment manifest with this specific image and apply
+          sed "s|REPLACE_WITH_IMAGE|${IMAGE}|g" k8s/deployment.yaml > /tmp/deploy.yaml
+          $K apply -f /tmp/deploy.yaml -n ${K8S_NAMESPACE}
+
+          # apply service
+          $K apply -f k8s/service.yaml -n ${K8S_NAMESPACE}
+
+          # wait for rollout
+          $K rollout status deployment/static-site -n ${K8S_NAMESPACE} --timeout=120s
+
+          echo "Kubernetes deploy finished."
+        '''
       }
     }
   }
@@ -131,7 +167,7 @@ pipeline {
       sh '''
         set +e
         docker rm -f static-site-${BUILD_NUMBER} || true
-        if [ -f "$WORKSPACE/.kube/config" ] && command -v "$WORKSPACE/kubectl" >/dev/null 2>&1; then
+        if [ -f "$WORKSPACE/.kube/config" ] && [ -x "$WORKSPACE/kubectl" ]; then
           export KUBECONFIG="$WORKSPACE/.kube/config"
           $WORKSPACE/kubectl rollout undo deployment/static-site -n ${K8S_NAMESPACE} || true
         fi
